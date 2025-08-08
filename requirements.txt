@@ -1,5 +1,5 @@
 streamlit
 pandas
-geopy
+requests
 openpyxl
-selenium
+geopy
