@@ -37,8 +37,8 @@ def geocode_address(address):
 st.markdown("### 📥 1. Ανέβασε Excel Επιχειρήσεων (στήλες: name, address, city)")
 biz_file = st.file_uploader("Excel με Διευθύνσεις", type=["xlsx"])
 
-st.markdown("### 📥 2. Ανέβασε CSV με FTTH σημεία (στήλες: latitude, longitude)")
-ftth_file = st.file_uploader("CSV FTTH Nova", type=["csv"])
+st.markdown("### 📥 2. Ανέβασε CSV ή Excel με FTTH σημεία (στήλες: latitude, longitude)")
+ftth_file = st.file_uploader("FTTH Nova", type=["csv", "xlsx"])
 
 distance_limit = st.number_input("📏 Μέγιστη απόσταση (σε μέτρα)", min_value=5, max_value=500, value=50, step=5)
 
@@ -48,9 +48,13 @@ if biz_file and ftth_file:
         st.error("❌ Το αρχείο επιχειρήσεων πρέπει να έχει τις στήλες: name, site.company_insights.address, site.company_insights.city")
         st.stop()
 
-    ftth_df = pd.read_csv(ftth_file)
+    if ftth_file.name.endswith(".csv"):
+        ftth_df = pd.read_csv(ftth_file)
+    else:
+        ftth_df = pd.read_excel(ftth_file)
+
     if not {"latitude", "longitude"}.issubset(ftth_df.columns):
-        st.error("❌ Το CSV FTTH πρέπει να έχει στήλες: latitude, longitude")
+        st.error("❌ Το αρχείο FTTH πρέπει να έχει στήλες: latitude, longitude")
         st.stop()
 
     st.info("🔄 Γίνεται geocoding στις διευθύνσεις...")
@@ -109,4 +113,3 @@ if biz_file and ftth_file:
         )
     else:
         st.warning("⚠️ Δεν βρέθηκαν επιχειρήσεις εντός FTTH κάλυψης.")
-
