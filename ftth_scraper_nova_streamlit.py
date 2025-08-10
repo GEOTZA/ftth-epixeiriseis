@@ -33,7 +33,7 @@ ftth_file = st.file_uploader("FTTH σημεία (Excel/CSV με στήλες: la
 prev_geo_file = st.file_uploader("🧠 Προηγούμενα geocoded (προαιρετικά)", type=["xlsx", "csv"])
 
 def load_table(uploaded):
-    if uploaded is None: 
+    if uploaded is None:
         return None
     name = uploaded.name.lower()
     if name.endswith(".csv"):
@@ -45,21 +45,30 @@ ftth_df = load_table(ftth_file) if ftth_file else None
 prev_df = load_table(prev_geo_file) if prev_geo_file else None
 
 def pick_first_series(df: pd.DataFrame, candidates):
+    """Επιστρέφει μία Series από την πρώτη ταιριαστή στήλη (αν υπάρχουν διπλές, παίρνει την 1η)."""
     for cand in candidates:
+        # ακριβές ταίριασμα
         exact = [c for c in df.columns if c.lower() == cand.lower()]
         if exact:
             col = df[exact]
             return col.iloc[:, 0] if isinstance(col, pd.DataFrame) else col
+        # loose (regex)
         loose = df.filter(regex=fr"(?i)^{cand}$")
         if loose.shape[1] > 0:
             return loose.iloc[:, 0]
     return pd.Series([""] * len(df), index=df.index, dtype="object")
 
 def normalize_ftth(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename -> latitude/longitude, dropna, ΚΑΙ διόρθωση κόμμα/τελεία -> float."""
     cols = {c.lower(): c for c in df.columns}
     if "latitude" not in cols or "longitude" not in cols:
         raise ValueError("Το αρχείο FTTH πρέπει να έχει στήλες: latitude, longitude.")
-    return df.rename(columns={cols["latitude"]: "latitude", cols["longitude"]: "longitude"})[["latitude","longitude"]].dropna()
+    out = df.rename(columns={cols["latitude"]: "latitude", cols["longitude"]: "longitude"})[["latitude", "longitude"]].dropna()
+    # κόμμα -> τελεία και σε float
+    out["latitude"] = pd.to_numeric(out["latitude"].astype(str).str.replace(",", "."), errors="coerce")
+    out["longitude"] = pd.to_numeric(out["longitude"].astype(str).str.replace(",", "."), errors="coerce")
+    out = out.dropna(subset=["latitude", "longitude"])
+    return out
 
 if ftth_df is not None:
     try:
@@ -68,6 +77,7 @@ if ftth_df is not None:
         st.error(str(e))
         st.stop()
 
+# Cache για geocoding
 if CACHE_OK:
     requests_cache.install_cache("geocode_cache", backend="sqlite", expire_after=60*60*24*14)
 
@@ -99,6 +109,7 @@ def geocode_address(address, provider, api_key=None, cc="gr", lang="el", throttl
         lat, lon = geocode_google(address, api_key, lang=lang)
     else:
         lat, lon = geocode_nominatim(address, cc, lang)
+        # ευγένεια στον Nominatim μόνο σε πραγματικά network calls
         if not getattr(session, "cache_disabled", True):
             time.sleep(throttle_sec)
     if lat is None and "greece" not in address.lower() and "ελλάδα" not in address.lower():
@@ -127,10 +138,16 @@ if start and biz_df is not None and ftth_df is not None:
     work = work[work["Address"].str.len() > 3].copy()
     unique_addresses = sorted(work["Address"].dropna().unique().tolist())
 
+    # Resume από προηγούμενο geocoded
     geo_map = {}
     if prev_df is not None and {"Address","Latitude","Longitude"}.issubset(prev_df.columns):
+        # Κόμμα/τελεία fix & coercion
+        prev_df = prev_df.rename(columns={"Latitude":"Latitude","Longitude":"Longitude","Address":"Address"})
+        prev_df["Latitude"]  = pd.to_numeric(prev_df["Latitude"].astype(str).str.replace(",", "."), errors="coerce")
+        prev_df["Longitude"] = pd.to_numeric(prev_df["Longitude"].astype(str).str.replace(",", "."), errors="coerce")
+        prev_df = prev_df.dropna(subset=["Latitude","Longitude"])
         for _, r in prev_df.iterrows():
-            geo_map[r["Address"]] = (r["Latitude"], r["Longitude"])
+            geo_map[str(r["Address"])] = (float(r["Latitude"]), float(r["Longitude"]))
 
     total = len(unique_addresses)
     progress = st.progress(0, text=f"0 / {total}")
@@ -140,6 +157,7 @@ if start and biz_df is not None and ftth_df is not None:
         if addr in geo_map:
             lat, lon = geo_map[addr]
         else:
+            # προσθέτουμε και την πόλη του sidebar για σταθερότητα
             query = f"{addr}, {city_filter}" if city_filter and city_filter.lower() not in addr.lower() else addr
             lat, lon = geocode_address(query, geocoder, api_key=google_key, cc=country, lang=lang, throttle_sec=throttle)
             if lat is not None and lon is not None:
@@ -150,32 +168,49 @@ if start and biz_df is not None and ftth_df is not None:
 
     geocoded_df = pd.DataFrame([{"Address": a, "Latitude": v[0], "Longitude": v[1]} for a, v in geo_map.items() if v[0] is not None])
 
+    # Κόμμα/τελεία fix στα geocoded πριν το merge (ασφάλεια)
+    if not geocoded_df.empty:
+        geocoded_df["Latitude"]  = pd.to_numeric(geocoded_df["Latitude"].astype(str).str.replace(",", "."), errors="coerce")
+        geocoded_df["Longitude"] = pd.to_numeric(geocoded_df["Longitude"].astype(str).str.replace(",", "."), errors="coerce")
+        geocoded_df = geocoded_df.dropna(subset=["Latitude","Longitude"])
+
+    # Join back
     merged = work.merge(geocoded_df, on="Address", how="left")
+
+    # Φιλτράρισμα στην πόλη του sidebar
     merged = merged[merged["Address"].str.contains(city_filter, case=False, na=False)]
 
+    # Matching
     ftth_points = ftth_df[["latitude","longitude"]].dropna().to_numpy()
     matches = []
     for _, row in merged.dropna(subset=["Latitude","Longitude"]).iterrows():
-        biz_coords = (row["Latitude"], row["Longitude"])
+        # κόμμα/τελεία fix & coercion επιπλέον ασφάλεια
+        try:
+            biz_lat = float(str(row["Latitude"]).replace(",", "."))
+            biz_lon = float(str(row["Longitude"]).replace(",", "."))
+        except Exception:
+            continue
+        biz_coords = (biz_lat, biz_lon)
+
         for ft_lat, ft_lon in ftth_points:
-            d = geodesic(biz_coords, (ft_lat, ft_lon)).meters
+            d = geodesic(biz_coords, (float(ft_lat), float(ft_lon))).meters
             if d <= distance_limit:
                 matches.append({
                     "name": row.get("name", ""),
                     "Address": row["Address"],
-                    "Latitude": row["Latitude"],
-                    "Longitude": row["Longitude"],
-                    "FTTH_lat": ft_lat,
-                    "FTTH_lon": ft_lon,
+                    "Latitude": biz_lat,
+                    "Longitude": biz_lon,
+                    "FTTH_lat": float(ft_lat),
+                    "FTTH_lon": float(ft_lon),
                     "Distance(m)": round(d, 2)
                 })
                 break
 
     result_df = pd.DataFrame(matches)
 
-    # Διόρθωση για KeyError στο sort
-    if not result_df.empty and all(c in result_df.columns for c in ["Exact(5dp)", "Distance(m)"]):
-        result_df = result_df.sort_values(["Exact(5dp)", "Distance(m)"], ascending=[False, True])
+    # Safe sort (αν υπάρχουν οι στήλες)
+    if not result_df.empty and all(c in result_df.columns for c in ["Distance(m)"]):
+        result_df = result_df.sort_values(["Distance(m)"], ascending=[True])
     result_df = result_df.reset_index(drop=True)
 
     if result_df.empty:
@@ -184,14 +219,22 @@ if start and biz_df is not None and ftth_df is not None:
         st.success(f"✅ Βρέθηκαν {len(result_df)} επιχειρήσεις στην πόλη '{city_filter}' εντός {distance_limit} m από FTTH.")
         st.dataframe(result_df, use_container_width=True)
 
-    def to_excel_bytes(df):
+    # -------- Robust Excel export --------
+    def to_excel_bytes(df: pd.DataFrame):
+        safe = df.copy()
+        if safe is None or safe.empty:
+            safe = pd.DataFrame([{"info": "no data"}])
+        # ονόματα στηλών ως string
+        safe.columns = [str(c) for c in safe.columns]
+        # διασφάλιση scalar τιμών
+        for c in safe.columns:
+            safe[c] = safe[c].apply(lambda x: x if pd.api.types.is_scalar(x) else str(x))
         output = io.BytesIO()
-        if df.empty:
-            df = pd.DataFrame({"Μήνυμα": ["Δεν υπάρχουν δεδομένα"]})
-        df.columns = [str(c) for c in df.columns]
-        df.to_excel(output, index=False, engine="openpyxl")
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            safe.to_excel(writer, index=False, sheet_name="Sheet1")
         output.seek(0)
         return output
+    # -------------------------------------
 
     col1, col2, col3 = st.columns(3)
     with col1:
