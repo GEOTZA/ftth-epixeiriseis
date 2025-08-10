@@ -5,7 +5,6 @@ import requests
 from geopy.distance import geodesic
 import io
 import time
-import math
 
 try:
     import requests_cache
@@ -59,23 +58,43 @@ ftth_df = load_table(ftth_file) if ftth_file else None
 prev_df = load_table(prev_geo_file) if prev_geo_file else None
 
 # -----------------------------
-# Normalize business input
+# Normalize helpers & fixes
 # -----------------------------
+def pick_first_series(df: pd.DataFrame, candidates):
+    """Επιστρέφει ΜΙΑ Series από την πρώτη διαθέσιμη στήλη που ταιριάζει.
+    Αν υπάρχουν πολλαπλές στήλες με ίδιο όνομα, παίρνει την πρώτη (.iloc[:,0]).
+    Αν δεν βρεθεί, επιστρέφει κενή Series (για ασφαλές concat)."""
+    # ακριβές ταίριασμα
+    for cand in candidates:
+        exact = [c for c in df.columns if c.lower() == cand.lower()]
+        if exact:
+            col = df[exact]
+            return col.iloc[:, 0] if isinstance(col, pd.DataFrame) else col
+        loose = df.filter(regex=fr"(?i)^{cand}$")
+        if loose.shape[1] > 0:
+            return loose.iloc[:, 0]
+    return pd.Series([""] * len(df), index=df.index, dtype="object")
+
 def normalize_biz_columns(df: pd.DataFrame) -> pd.DataFrame:
-    cols = {c.lower(): c for c in df.columns}
-    # Try outscraper style first
+    cols_lower = [c.lower() for c in df.columns]
+    # Αν υπάρχει outscraper μορφή, απλώς κάνε rename σε address/city
     if "site.company_insights.address" in df.columns and "site.company_insights.city" in df.columns and "name" in df.columns:
         df = df.rename(columns={
             "site.company_insights.address": "address",
             "site.company_insights.city": "city"
         })
         return df
-    # Try lowercase variants
-    elif "address" in cols and "city" in cols and "name" in cols:
-        # nothing
-        return df.rename(columns={cols["address"]: "address", cols["city"]: "city", cols["name"]: "name"})
-    else:
-        raise ValueError("Το αρχείο επιχειρήσεων πρέπει να έχει στήλες: name, address, city (ή name, site.company_insights.address, site.company_insights.city).")
+    # Διαφορετικά, αν υπάρχουν address/city/name (οποιουδήποτε casing)
+    has_addr = any(c in ["address"] for c in cols_lower)
+    has_city = any(c in ["city"] for c in cols_lower)
+    has_name = any(c in ["name"] for c in cols_lower)
+    if has_addr and has_city and has_name:
+        # Βρες τα πραγματικά ονόματα (case-insensitive)
+        addr_col = [c for c in df.columns if c.lower() == "address"][0]
+        city_col = [c for c in df.columns if c.lower() == "city"][0]
+        name_col = [c for c in df.columns if c.lower() == "name"][0]
+        return df.rename(columns={addr_col: "address", city_col: "city", name_col: "name"})
+    raise ValueError("Το αρχείο επιχειρήσεων πρέπει να έχει στήλες: name, address, city (ή name, site.company_insights.address, site.company_insights.city).")
 
 def normalize_ftth(df: pd.DataFrame) -> pd.DataFrame:
     cols = {c.lower(): c for c in df.columns}
@@ -126,7 +145,7 @@ def geocode_nominatim(address, cc="gr", lang="el"):
         return float(data[0]["lat"]), float(data[0]["lon"])
     return None, None
 
-def geocode_google(address, api_key):
+def geocode_google(address, api_key, lang="el"):
     params = {"address": address, "key": api_key, "language": lang}
     r = session.get("https://maps.googleapis.com/maps/api/geocode/json", params=params, timeout=15)
     r.raise_for_status()
@@ -137,19 +156,18 @@ def geocode_google(address, api_key):
     return None, None
 
 def geocode_address(address, provider, api_key=None, cc="gr", lang="el", throttle_sec=1.0):
-    # Try exact
     lat, lon = (None, None)
     if provider.startswith("Google") and api_key:
-        lat, lon = geocode_google(address, api_key)
+        lat, lon = geocode_google(address, api_key, lang=lang)
     else:
         lat, lon = geocode_nominatim(address, cc, lang)
+        # polite throttle μόνο όταν δεν είναι cache hit
         if not getattr(session, "cache_disabled", True):
-            time.sleep(throttle_sec)  # be polite only for live calls (requests-cache skips network)
-    # Fallback: add ", Greece" if not there
+            time.sleep(throttle_sec)
     if lat is None and "greece" not in address.lower() and "ελλάδα" not in address.lower():
         fallback = f"{address}, Greece"
         if provider.startswith("Google") and api_key:
-            lat, lon = geocode_google(fallback, api_key)
+            lat, lon = geocode_google(fallback, api_key, lang=lang)
         else:
             lat, lon = geocode_nominatim(fallback, cc, lang)
             if not getattr(session, "cache_disabled", True):
@@ -161,12 +179,21 @@ def geocode_address(address, provider, api_key=None, cc="gr", lang="el", throttl
 # -----------------------------
 if biz_df is not None and ftth_df is not None:
     st.subheader("🔄 Geocoding διευθύνσεων")
-    # Φτιάξε πλήρη διεύθυνση
+
     work = biz_df.copy()
-    work["Address"] = (work["address"].astype(str).str.strip() + ", " + work["city"].astype(str).str.strip()).str.replace(r"\s+", " ", regex=True)
+
+    # Χρήση pick_first_series για να αποφύγουμε DataFrame αντί για Series
+    addr_series = pick_first_series(work, ["address", "site.company_insights.address", "διεύθυνση"])
+    city_series = pick_first_series(work, ["city", "site.company_insights.city", "πόλη"])
+
+    work["Address"] = (
+        addr_series.astype(str).str.strip()
+        + ", "
+        + city_series.astype(str).str.strip()
+    ).str.replace(r"\s+", " ", regex=True)
 
     # Remove rows with empty Address
-    work = work[work["Address"].str.len() > 3]
+    work = work[work["Address"].str.len() > 3].copy()
 
     # Deduplicate
     unique_addresses = sorted(work["Address"].dropna().unique().tolist())
@@ -179,9 +206,9 @@ if biz_df is not None and ftth_df is not None:
 
     total = len(unique_addresses)
     progress = st.progress(0, text=f"0 / {total}")
-    results = []
     errs = 0
 
+    # Γεωκωδικοποίηση
     for i, addr in enumerate(unique_addresses, start=1):
         if addr in geo_map:
             lat, lon = geo_map[addr]
@@ -210,7 +237,6 @@ if biz_df is not None and ftth_df is not None:
     matches = []
     for _, row in merged.dropna(subset=["Latitude","Longitude"]).iterrows():
         biz_coords = (row["Latitude"], row["Longitude"])
-        # Fast coarse check: break early at first match within threshold
         for ft_lat, ft_lon in ftth_points:
             d = geodesic(biz_coords, (ft_lat, ft_lon)).meters
             if d <= distance_limit:
@@ -230,17 +256,22 @@ if biz_df is not None and ftth_df is not None:
     st.dataframe(result_df, use_container_width=True)
 
     # Downloads
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         out_geo = io.BytesIO()
         geocoded_df.to_excel(out_geo, index=False)
         out_geo.seek(0)
-        st.download_button("⬇️ Κατέβασε τις γεωκωδικοποιημένες διευθύνσεις", out_geo, file_name="geocoded_addresses.xlsx")
-
+        st.download_button("⬇️ Geocoded διευθύνσεις", out_geo, file_name="geocoded_addresses.xlsx")
     with col2:
         out_res = io.BytesIO()
         result_df.to_excel(out_res, index=False)
         out_res.seek(0)
-        st.download_button("⬇️ Κατέβασε τα αποτελέσματα Matching", out_res, file_name="ftth_matching_results.xlsx")
+        st.download_button("⬇️ Αποτελέσματα Matching", out_res, file_name="ftth_matching_results.xlsx")
+    with col3:
+        out_all = io.BytesIO()
+        merged.to_excel(out_all, index=False)
+        out_all.seek(0)
+        st.download_button("⬇️ Όλα τα δεδομένα (merged)", out_all, file_name="merged_with_geocoded.xlsx")
+
 else:
     st.info("📄 Ανέβασε αρχεία Επιχειρήσεων & FTTH για να ξεκινήσεις.")
