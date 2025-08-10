@@ -5,7 +5,7 @@ from geopy.distance import geodesic
 import io
 import time
 
-# -------- Optional cache --------
+# ---------- Optional cache ----------
 try:
     import requests_cache
     CACHE_OK = True
@@ -13,7 +13,7 @@ except Exception:
     CACHE_OK = False
 
 st.set_page_config(page_title="FTTH Geocoding & Matching (v5)", layout="wide")
-st.title("📡 FTTH Geocoding & Matching – v5 (line-by-line)")
+st.title("📡 FTTH Geocoding & Matching – v5")
 
 # ========== Sidebar ==========
 with st.sidebar:
@@ -23,15 +23,19 @@ with st.sidebar:
     country = st.text_input("Country code", "gr")
     lang = st.text_input("Language", "el")
     throttle = st.slider("Καθυστέρηση (sec) [Nominatim]", 0.5, 2.0, 1.0, 0.5)
-    distance_limit = st.number_input("📏 Μέγιστη απόσταση (m)", min_value=1, max_value=1000, value=50)
-    city_filter = st.text_input("🏙 Πόλη", "Ηράκλειο Κρήτης")
+    distance_limit = st.number_input("📏 Μέγιστη απόσταση (m)", min_value=1, max_value=500, value=150)
 
-# ========== Uploads ==========
+    st.subheader("Πηγή Επιχειρήσεων")
+    biz_source = st.radio("Επιλογή", ["Upload Excel/CSV", "ΓΕΜΗ (OpenData API)"], index=0)
+    gemi_key = st.text_input("GΕΜΗ API Key", type="password") if biz_source == "ΓΕΜΗ (OpenData API)" else None
+
+# ========== Uploads & Inputs ==========
 st.subheader("📥 Αρχεία")
-biz_file = st.file_uploader("Excel/CSV Επιχειρήσεων", type=["xlsx", "csv"])
+biz_file = st.file_uploader("Excel/CSV Επιχειρήσεων", type=["xlsx", "csv"]) if biz_source == "Upload Excel/CSV" else None
 ftth_file = st.file_uploader("FTTH σημεία Nova (Excel/CSV) – υποστηρίζει ελληνικές στήλες λ/φ και πολλαπλά sheets", type=["xlsx", "csv"])
 prev_geo_file = st.file_uploader("🧠 Προηγούμενα geocoded (προαιρετικά) – Excel/CSV με στήλες: Address, Latitude, Longitude", type=["xlsx", "csv"])
 
+# ---------- Helpers ----------
 def load_table(uploaded):
     if uploaded is None:
         return None
@@ -40,10 +44,18 @@ def load_table(uploaded):
         return pd.read_csv(uploaded)
     return pd.read_excel(uploaded)
 
-biz_df = load_table(biz_file) if biz_file else None
-prev_df = load_table(prev_geo_file) if prev_geo_file else None
+def pick_first_series(df: pd.DataFrame, candidates):
+    """Επιστρέφει μία Series από την πρώτη ταιριαστή στήλη (αν υπάρχουν διπλές, παίρνει την 1η)."""
+    for cand in candidates:
+        exact = [c for c in df.columns if c.lower() == cand.lower()]
+        if exact:
+            col = df[exact]
+            return col.iloc[:, 0] if isinstance(col, pd.DataFrame) else col
+        loose = df.filter(regex=fr"(?i)^{cand}$")
+        if loose.shape[1] > 0:
+            return loose.iloc[:, 0]
+    return pd.Series([""] * len(df), index=df.index, dtype="object")
 
-# -------- Helpers για ελληνικά headers λ/φ --------
 def _clean_col(s: str) -> str:
     return (
         str(s).lower()
@@ -64,7 +76,7 @@ def _find_col(df: pd.DataFrame, patterns: list[str]) -> str | None:
     return None
 
 def normalize_ftth(df: pd.DataFrame) -> pd.DataFrame:
-    # Πιάσε EN/GR: latitude/longitude ή γεωγραφικο πλατος (φ) / μηκος (λ)
+    """Πιάνει EN/GR: latitude/longitude ή γεωγραφικο πλατος (φ) / μηκος (λ), κόμμα→τελεία, float."""
     lat_col = _find_col(df, ["latitude", "lat", "πλατος", "γεωγραφικο πλατος", "φ"])
     lon_col = _find_col(df, ["longitude", "lon", "long", "μηκος", "γεωγραφικο μηκος", "λ"])
     if not lat_col or not lon_col:
@@ -75,7 +87,25 @@ def normalize_ftth(df: pd.DataFrame) -> pd.DataFrame:
     out = out.dropna(subset=["latitude","longitude"])
     return out
 
-# Διαβάζουμε FTTH Nova (υποστήριξη multi-sheet)
+def _first_key(d: dict, keys: list[str], default=""):
+    for k in keys:
+        if k in d and d[k]:
+            return d[k]
+    return default
+
+def _to_excel_bytes(df: pd.DataFrame):
+    output = io.BytesIO()
+    if df is None or df.empty:
+        df = pd.DataFrame([{"info": "no data"}])
+    df.columns = [str(c) for c in df.columns]
+    for c in df.columns:
+        df[c] = df[c].apply(lambda x: x if pd.api.types.is_scalar(x) else str(x))
+    with pd.ExcelWriter(output, engine="openpyxl") as w:
+        df.to_excel(w, index=False)
+    output.seek(0)
+    return output
+
+# ---------- FTTH load (Nova) ----------
 ftth_df = None
 if ftth_file is not None:
     if ftth_file.name.lower().endswith(".xlsx"):
@@ -88,7 +118,90 @@ if ftth_file is not None:
         raw = load_table(ftth_file)
         ftth_df = normalize_ftth(raw)
 
-# -------- Cache geocoding --------
+# ---------- Biz source ----------
+biz_df = None
+if biz_source == "Upload Excel/CSV":
+    biz_df = load_table(biz_file) if biz_file else None
+
+# ---------- GEMI (OpenData API) ----------
+GEMI_BASE = "https://opendata-api.businessportal.gr/opendata"
+
+def gemi_params(api_key, what):
+    headers = {"X-API-Key": api_key}
+    r = requests.get(f"{GEMI_BASE}/params/{what}", headers=headers, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+def gemi_search(api_key, nomos_id=None, dimos_id=None, status_id=None, name_part=None, kad_list=None, page=1, page_size=200):
+    headers = {"X-API-Key": api_key}
+    payload = {
+        "page": page, "page_size": page_size,
+        "nomos_id": nomos_id, "dimos_id": dimos_id,
+        "status_id": status_id, "name_part": name_part, "kad": kad_list or []
+    }
+    r = requests.post(f"{GEMI_BASE}/search", json=payload, headers=headers, timeout=60)
+    r.raise_for_status()
+    return r.json()
+
+gemi_df = None
+if biz_source == "ΓΕΜΗ (OpenData API)":
+    if not gemi_key:
+        st.warning("🔑 Βάλε GΕΜΗ API Key για να ενεργοποιηθεί η αναζήτηση.")
+    else:
+        try:
+            nomoi = gemi_params(gemi_key, "nomoi")
+            statuses = gemi_params(gemi_key, "statuses")
+
+            nomos_names = [n["name"] for n in nomoi]
+            sel_nomos = st.selectbox("Νομός", nomos_names, index=0)
+            nomos_id = next(n["id"] for n in nomoi if n["name"] == sel_nomos)
+
+            dimoi = gemi_params(gemi_key, f"dimoi/{nomos_id}")
+            dimos_names = [d["name"] for d in dimoi]
+            sel_dimos = st.selectbox("Δήμος", dimos_names, index=0)
+            dimos_id = next(d["id"] for d in dimoi if d["name"] == sel_dimos)
+
+            status_names = [s["name"] for s in statuses]
+            default_status = next((i for i,s in enumerate(statuses) if "ενεργ" in s["name"].lower()), 0)
+            sel_status = st.selectbox("Κατάσταση", status_names, index=default_status)
+            status_id = next(s["id"] for s in statuses if s["name"] == sel_status)
+
+            name_part = st.text_input("Κομμάτι επωνυμίας (προαιρετικό)", "")
+
+            if st.button("🔎 Αναζήτηση ΓΕΜΗ"):
+                data = gemi_search(gemi_key, nomos_id=nomos_id, dimos_id=dimos_id, status_id=status_id, name_part=name_part)
+                rows = []
+                for it in data.get("items", []):
+                    name  = _first_key(it, ["name", "company_name"])
+                    addr  = _first_key(it, ["address", "postal_address", "registered_address"])
+                    city  = _first_key(it, ["municipality", "dimos_name", "city"])
+                    afm   = _first_key(it, ["afm", "vat_number", "tin"])
+                    gemi  = _first_key(it, ["gemi_number", "registry_number", "commercial_registry_no"])
+                    phone = _first_key(it, ["phone", "telephone", "contact_phone", "phone_number"])
+                    email = _first_key(it, ["email", "contact_email", "email_address"])
+                    rows.append({
+                        "name": name, "address": addr, "city": city,
+                        "afm": afm, "gemi": gemi, "phone": phone, "email": email
+                    })
+                gemi_df = pd.DataFrame(rows)
+                if gemi_df.empty:
+                    st.warning("Δεν βρέθηκαν εγγραφές από ΓΕΜΗ με τα φίλτρα που έβαλες.")
+                else:
+                    st.success(f"Βρέθηκαν {len(gemi_df)} εγγραφές από ΓΕΜΗ.")
+                    st.dataframe(gemi_df, use_container_width=True)
+                    st.download_button(
+                        "⬇️ Κατέβασμα επιχειρήσεων ΓΕΜΗ (Excel)",
+                        _to_excel_bytes(gemi_df),
+                        file_name="gemi_businesses.xlsx"
+                    )
+        except Exception as e:
+            st.error(f"Σφάλμα ΓΕΜΗ: {e}")
+
+# Αν επιλεγεί ΓΕΜΗ, χρησιμοποίησε αυτά τα δεδομένα ως πηγή επιχειρήσεων
+if biz_source == "ΓΕΜΗ (OpenData API)":
+    biz_df = gemi_df
+
+# ---------- Geocode cache ----------
 if CACHE_OK:
     requests_cache.install_cache("geocode_cache", backend="sqlite", expire_after=60*60*24*14)
 
@@ -120,7 +233,7 @@ def geocode_address(address, provider, api_key=None, cc="gr", lang="el", throttl
         lat, lon = geocode_google(address, api_key, lang=lang)
     else:
         lat, lon = geocode_nominatim(address, cc, lang)
-        # throttle μόνο όταν είναι πραγματικό network call (όχι cache)
+        # throttle μόνο σε πραγματικό network call (όχι cache)
         if not getattr(session, "cache_disabled", True):
             time.sleep(throttle_sec)
     if lat is None and "greece" not in address.lower() and "ελλάδα" not in address.lower():
@@ -133,32 +246,23 @@ def geocode_address(address, provider, api_key=None, cc="gr", lang="el", throttl
                 time.sleep(throttle_sec)
     return lat, lon
 
-# -------- Utility για επιλογή στηλών διεύθυνσης/πόλης από διάφορα exports --------
-def pick_first_series(df: pd.DataFrame, candidates):
-    for cand in candidates:
-        exact = [c for c in df.columns if c.lower() == cand.lower()]
-        if exact:
-            col = df[exact]
-            return col.iloc[:, 0] if isinstance(col, pd.DataFrame) else col
-        loose = df.filter(regex=fr"(?i)^{cand}$")
-        if loose.shape[1] > 0:
-            return loose.iloc[:, 0]
-    return pd.Series([""] * len(df), index=df.index, dtype="object")
-
 # ========== Main ==========
 start = st.button("🚀 Ξεκίνα geocoding & matching")
 
 if start and biz_df is not None and ftth_df is not None:
     work = biz_df.copy()
+
+    # Επιλογή πιθανών στηλών διεύθυνσης/πόλης για κάθε είδος upload
     addr_series = pick_first_series(work, ["address", "site.company_insights.address", "διεύθυνση", "οδός", "διευθυνση"])
     city_series = pick_first_series(work, ["city", "site.company_insights.city", "πόλη"])
 
+    # Τελική διεύθυνση προς geocoding (χωρίς φίλτρο πόλης μετά)
     base_addr = addr_series.astype(str).str.strip()
-    fallback_city = city_filter.strip()
-    from_input_city = city_series.astype(str).str.strip().replace("", fallback_city)
+    from_input_city = city_series.astype(str).str.strip()
+    # Αν λείπει city στο αρχείο, κρατάμε μόνο τη διεύθυνση — Google/Nominatim θα το βγάλουν από context
+    work["Address"] = (base_addr + (", " + from_input_city).where(from_input_city.ne(""), "")).str.replace(r"\s+", " ", regex=True)
 
-    # Τελική διεύθυνση προς geocoding
-    work["Address"] = (base_addr + ", " + from_input_city).str.replace(r"\s+", " ", regex=True)
+    # Αφαίρεση εντελώς κενών διευθύνσεων
     work = work[work["Address"].str.len() > 3].copy()
 
     # ----- Line-by-line geocoding (ΟΛΕΣ οι γραμμές) -----
@@ -168,13 +272,16 @@ if start and biz_df is not None and ftth_df is not None:
 
     # cache από prev_df (αν δόθηκε)
     geo_map = {}
+    if prev_geo_file is not None:
+        prev_df = load_table(prev_geo_file)
+    else:
+        prev_df = None
+
     if prev_df is not None and {"Address","Latitude","Longitude"}.issubset({c.title() if c.islower() else c for c in prev_df.columns}):
-        # ομογενοποίηση ονομάτων
         cols = {c.lower(): c for c in prev_df.columns}
         p = prev_df.rename(columns={cols.get("address","address"): "Address",
                                     cols.get("latitude","latitude"): "Latitude",
                                     cols.get("longitude","longitude"): "Longitude"})
-        # κόμμα/τελεία -> float
         p["Latitude"]  = pd.to_numeric(p["Latitude"].astype(str).str.replace(",", "."), errors="coerce")
         p["Longitude"] = pd.to_numeric(p["Longitude"].astype(str).str.replace(",", "."), errors="coerce")
         p = p.dropna(subset=["Latitude","Longitude"])
@@ -190,9 +297,7 @@ if start and biz_df is not None and ftth_df is not None:
         if addr in geo_map:
             lat, lon = geo_map[addr]
         else:
-            # πρόσθεσε την πόλη για σταθερότητα
-            query = f"{addr}, {city_filter}" if city_filter and city_filter.lower() not in addr.lower() else addr
-            lat, lon = geocode_address(query, geocoder, api_key=google_key, cc=country, lang=lang, throttle_sec=throttle)
+            lat, lon = geocode_address(addr, geocoder, api_key=google_key, cc=country, lang=lang, throttle_sec=throttle)
             if lat is not None and lon is not None:
                 geo_map[addr] = (lat, lon)
             else:
@@ -207,8 +312,8 @@ if start and biz_df is not None and ftth_df is not None:
     work["Latitude"]  = pd.to_numeric(work["Latitude"].astype(str).str.replace(",", "."), errors="coerce")
     work["Longitude"] = pd.to_numeric(work["Longitude"].astype(str).str.replace(",", "."), errors="coerce")
 
-    # Φιλτράρισμα τελικού dataset στην πόλη
-    merged = work[work["Address"].str.contains(city_filter, case=False, na=False)].copy()
+    # merged = όλα τα geocoded rows (χωρίς φιλτράρισμα πόλης)
+    merged = work.copy()
 
     # ----- Matching -----
     ftth_points = ftth_df[["latitude","longitude"]].dropna().to_numpy()
@@ -221,7 +326,6 @@ if start and biz_df is not None and ftth_df is not None:
             continue
         biz_coords = (biz_lat, biz_lon)
 
-        # έλεγχος απόστασης
         for ft_lat, ft_lon in ftth_points:
             d = geodesic(biz_coords, (float(ft_lat), float(ft_lon))).meters
             if d <= distance_limit:
@@ -242,9 +346,9 @@ if start and biz_df is not None and ftth_df is not None:
 
     # ----- UI -----
     if result_df.empty:
-        st.warning(f"⚠️ Δεν βρέθηκαν επιχειρήσεις στην πόλη '{city_filter}' εντός {distance_limit} m από FTTH.")
+        st.warning(f"⚠️ Δεν βρέθηκαν αντιστοιχίσεις εντός {distance_limit} m.")
     else:
-        st.success(f"✅ Βρέθηκαν {len(result_df)} επιχειρήσεις στην πόλη '{city_filter}' εντός {distance_limit} m από FTTH.")
+        st.success(f"✅ Βρέθηκαν {len(result_df)} επιχειρήσεις εντός {distance_limit} m από FTTH.")
         st.dataframe(result_df, use_container_width=True)
 
     # ----- Robust Excel export -----
@@ -272,4 +376,4 @@ if start and biz_df is not None and ftth_df is not None:
 elif start and (biz_df is None or ftth_df is None):
     st.error("❌ Ανέβασε και τα δύο αρχεία: Επιχειρήσεις & FTTH σημεία.")
 else:
-    st.info("📄 Ανέβασε αρχεία, διάλεξε sheet (Nova) αν χρειάζεται, συμπλήρωσε πόλη και πάτα «🚀 Ξεκίνα».")
+    st.info("📄 Ανέβασε FTTH, επίλεξε πηγή επιχειρήσεων (Upload ή ΓΕΜΗ), και πάτα «🚀 Ξεκίνα».")
