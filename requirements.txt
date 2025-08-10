@@ -3,4 +3,4 @@ pandas
 requests
 geopy
 openpyxl
-requests_cache
+requests-cache
