@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import requests
@@ -171,11 +172,24 @@ if start and biz_df is not None and ftth_df is not None:
     st.success(f"✅ Βρέθηκαν {len(result_df)} επιχειρήσεις στην πόλη '{city_filter}' εντός {distance_limit} m από FTTH.")
     st.dataframe(result_df, use_container_width=True)
 
-    def to_excel_bytes(df):
+    # -------- Robust Excel export --------
+    def to_excel_bytes(df: pd.DataFrame):
+        # Handle empty DF
+        safe = df.copy()
+        if safe is None or safe.empty:
+            safe = pd.DataFrame([{"info": "no data"}])
+        # Stringify column names
+        safe.columns = [str(c) for c in safe.columns]
+        # Ensure scalar values only (convert lists/dicts to str)
+        for c in safe.columns:
+            safe[c] = safe[c].apply(lambda x: x if pd.api.types.is_scalar(x) else str(x))
+        # Write
         output = io.BytesIO()
-        df.to_excel(output, index=False, engine="openpyxl")
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            safe.to_excel(writer, index=False, sheet_name="Sheet1")
         output.seek(0)
         return output
+    # -------------------------------------
 
     col1, col2, col3 = st.columns(3)
     with col1:
