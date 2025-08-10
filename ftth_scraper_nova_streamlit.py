@@ -6,14 +6,15 @@ from geopy.distance import geodesic
 import io
 import time
 
+# ================= Setup =================
 try:
     import requests_cache
     CACHE_OK = True
 except Exception:
     CACHE_OK = False
 
-st.set_page_config(page_title="FTTH Geocoding & Matching (v4)", layout="wide")
-st.title("📡 FTTH Geocoding & Matching – v4")
+st.set_page_config(page_title="FTTH Geocoding & Matching (v4.1)", layout="wide")
+st.title("📡 FTTH Geocoding & Matching – v4.1 (Ηράκλειο & κοντινά matches)")
 
 with st.sidebar:
     st.header("Ρυθμίσεις")
@@ -22,7 +23,8 @@ with st.sidebar:
     country = st.text_input("Country code", "gr")
     lang = st.text_input("Language", "el")
     throttle = st.slider("Καθυστέρηση (sec) [Nominatim]", 0.5, 2.0, 1.0, 0.5)
-    distance_limit = st.number_input("📏 Μέγιστη απόσταση (m)", min_value=1, max_value=1000, value=50)
+    # ΝΕΟ: slider 1–20m (default 5m)
+    distance_limit = st.slider("📏 Απόσταση (m) για κοντινά matches", min_value=1, max_value=20, value=5, step=1)
     city_filter = st.text_input("🏙 Πόλη", "Ηράκλειο Κρήτης")
 
 st.subheader("📥 Αρχεία")
@@ -42,6 +44,7 @@ biz_df = load_table(biz_file) if biz_file else None
 ftth_df = load_table(ftth_file) if ftth_file else None
 prev_df = load_table(prev_geo_file) if prev_geo_file else None
 
+# ================= Helpers =================
 def pick_first_series(df: pd.DataFrame, candidates):
     for cand in candidates:
         exact = [c for c in df.columns if c.lower() == cand.lower()]
@@ -57,8 +60,13 @@ def normalize_ftth(df: pd.DataFrame) -> pd.DataFrame:
     cols = {c.lower(): c for c in df.columns}
     if "latitude" not in cols or "longitude" not in cols:
         raise ValueError("Το αρχείο FTTH πρέπει να έχει στήλες: latitude, longitude.")
-    return df.rename(columns={cols["latitude"]: "latitude", cols["longitude"]: "longitude"})[["latitude","longitude"]].dropna()
+    df = df.rename(columns={cols["latitude"]: "latitude", cols["longitude"]: "longitude"})[["latitude","longitude"]]
+    # 🔧 Διόρθωση κόμματος/τελείας & μετατροπή σε float
+    df["latitude"]  = pd.to_numeric(df["latitude"].astype(str).str.replace(",", "."), errors="coerce")
+    df["longitude"] = pd.to_numeric(df["longitude"].astype(str).str.replace(",", "."), errors="coerce")
+    return df.dropna()
 
+# ================= FTTH normalize =================
 if ftth_df is not None:
     try:
         ftth_df = normalize_ftth(ftth_df)
@@ -66,6 +74,7 @@ if ftth_df is not None:
         st.error(str(e))
         st.stop()
 
+# ================= Caching & session =================
 if CACHE_OK:
     requests_cache.install_cache("geocode_cache", backend="sqlite", expire_after=60*60*24*14)
 
@@ -109,6 +118,9 @@ def geocode_address(address, provider, api_key=None, cc="gr", lang="el", throttl
                 time.sleep(throttle_sec)
     return lat, lon
 
+def _norm(s: str) -> str:
+    return (s or "").lower().replace(" κρητης", "").replace(" κρήτης", "").strip()
+
 start = st.button("🚀 Ξεκίνα geocoding & matching")
 
 if start and biz_df is not None and ftth_df is not None:
@@ -124,8 +136,9 @@ if start and biz_df is not None and ftth_df is not None:
     work = work[work["Address"].str.len() > 3].copy()
     unique_addresses = sorted(work["Address"].dropna().unique().tolist())
 
+    # Resume από προηγούμενο
     geo_map = {}
-    if prev_df is not None and {"Address","Latitude","Longitude"}.issubset(prev_df.columns):
+    if prev_geo_file is not None and prev_df is not None and {"Address","Latitude","Longitude"}.issubset(prev_df.columns):
         for _, r in prev_df.iterrows():
             geo_map[r["Address"]] = (r["Latitude"], r["Longitude"])
 
@@ -147,59 +160,77 @@ if start and biz_df is not None and ftth_df is not None:
 
     geocoded_df = pd.DataFrame([{"Address": a, "Latitude": v[0], "Longitude": v[1]} for a, v in geo_map.items() if v[0] is not None])
 
+    # Join back
     merged = work.merge(geocoded_df, on="Address", how="left")
-    merged = merged[merged["Address"].str.contains(city_filter, case=False, na=False)]
 
+    # 🔧 Κανονικοποίηση δεκαδικών και μετατροπή σε float στις γεωκωδικοποιημένες
+    if "Latitude" in merged.columns and "Longitude" in merged.columns:
+        merged["Latitude"]  = pd.to_numeric(merged["Latitude"].astype(str).str.replace(",", "."), errors="coerce")
+        merged["Longitude"] = pd.to_numeric(merged["Longitude"].astype(str).str.replace(",", "."), errors="coerce")
+
+    # Προαιρετικό & ανεκτικό φιλτράρισμα πόλης (δεν πετάμε αν δεν περιλαμβάνει ακριβώς)
+    if city_filter.strip():
+        cf = _norm(city_filter)
+        merged = merged[merged["Address"].fillna("").apply(lambda x: cf in _norm(x))]
+
+    # ============== Matching μόνο κοντινά (<= slider) ==============
     ftth_points = ftth_df[["latitude","longitude"]].dropna().to_numpy()
     matches = []
+    exact_count = 0
+
     for _, row in merged.dropna(subset=["Latitude","Longitude"]).iterrows():
         biz_coords = (row["Latitude"], row["Longitude"])
+        best_d = None
+        best_ft = None
+        # βρες το κοντινότερο FTTH
         for ft_lat, ft_lon in ftth_points:
             d = geodesic(biz_coords, (ft_lat, ft_lon)).meters
-            if d <= distance_limit:
-                matches.append({
-                    "name": row.get("name", ""),
-                    "Address": row["Address"],
-                    "Latitude": row["Latitude"],
-                    "Longitude": row["Longitude"],
-                    "FTTH_lat": ft_lat,
-                    "FTTH_lon": ft_lon,
-                    "Distance(m)": round(d, 2)
-                })
-                break
+            if best_d is None or d < best_d:
+                best_d = d
+                best_ft = (ft_lat, ft_lon)
+        # κράτα μόνο αν είναι εντός του slider
+        if best_d is not None and best_d <= distance_limit:
+            if round(row["Latitude"], 5) == round(best_ft[0], 5) and round(row["Longitude"], 5) == round(best_ft[1], 5):
+                exact = True
+                exact_count += 1
+            else:
+                exact = False
+            matches.append({
+                "name": row.get("name", ""),
+                "Address": row["Address"],
+                "Latitude": row["Latitude"],
+                "Longitude": row["Longitude"],
+                "FTTH_lat": best_ft[0],
+                "FTTH_lon": best_ft[1],
+                "Distance(m)": round(best_d, 2),
+                "Exact(5dp)": exact
+            })
 
-    result_df = pd.DataFrame(matches)
-    st.success(f"✅ Βρέθηκαν {len(result_df)} επιχειρήσεις στην πόλη '{city_filter}' εντός {distance_limit} m από FTTH.")
+    result_df = pd.DataFrame(matches).sort_values(["Exact(5dp)", "Distance(m)"], ascending=[False, True]).reset_index(drop=True)
+    st.success(f"✅ Κοντινά matches (<= {distance_limit} m): {len(result_df)} • 🎯 Exact (5dp): {exact_count}")
     st.dataframe(result_df, use_container_width=True)
 
-    # -------- Robust Excel export --------
+    # -------- Excel export --------
     def to_excel_bytes(df: pd.DataFrame):
-        # Handle empty DF
         safe = df.copy()
         if safe is None or safe.empty:
             safe = pd.DataFrame([{"info": "no data"}])
-        # Stringify column names
         safe.columns = [str(c) for c in safe.columns]
-        # Ensure scalar values only (convert lists/dicts to str)
         for c in safe.columns:
             safe[c] = safe[c].apply(lambda x: x if pd.api.types.is_scalar(x) else str(x))
-        # Write
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             safe.to_excel(writer, index=False, sheet_name="Sheet1")
         output.seek(0)
         return output
-    # -------------------------------------
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
-        st.download_button("⬇️ Geocoded διευθύνσεις", to_excel_bytes(geocoded_df), file_name="geocoded_addresses.xlsx")
+        st.download_button("⬇️ Κοντινά matches (Excel)", to_excel_bytes(result_df), file_name=f"ftth_matches_{distance_limit}m.xlsx")
     with col2:
-        st.download_button("⬇️ Αποτελέσματα Matching", to_excel_bytes(result_df), file_name="ftth_matching_results.xlsx")
-    with col3:
-        st.download_button("⬇️ Όλα τα δεδομένα (merged)", to_excel_bytes(merged), file_name="merged_with_geocoded.xlsx")
+        st.download_button("⬇️ Geocoded διευθύνσεις", to_excel_bytes(geocoded_df), file_name="geocoded_addresses.xlsx")
 
 elif start and (biz_df is None or ftth_df is None):
     st.error("❌ Ανέβασε και τα δύο αρχεία: Επιχειρήσεις & FTTH σημεία.")
 else:
-    st.info("📄 Ανέβασε αρχεία, συμπλήρωσε πόλη και πάτα «🚀 Ξεκίνα».")
+    st.info("📄 Ανέβασε αρχεία, συμπλήρωσε πόλη (προεπιλογή: Ηράκλειο Κρήτης) και πάτα «🚀 Ξεκίνα».")
