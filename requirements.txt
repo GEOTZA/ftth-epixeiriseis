@@ -1,6 +1,6 @@
-streamlit==1.48.0
-pandas==2.3.1
-geopy==2.4.1
-requests==2.32.4
-openpyxl==3.1.5
-requests-cache==1.2.1
+streamlit
+pandas
+geopy
+openpyxl
+requests
+requests-cache
