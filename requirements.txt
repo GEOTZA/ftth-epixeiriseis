@@ -1,6 +1,6 @@
 streamlit
 pandas
+requests
 geopy
 openpyxl
-requests
-requests-cache
+requests_cache
