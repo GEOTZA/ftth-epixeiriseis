@@ -58,22 +58,6 @@ with st.expander("🔌 API (ΓΕΜΗ) Ρυθμίσεις", expanded=True):
             st.error(f"Σφάλμα params: {e}")
 
 
-with st.sidebar:
-    st.header("Ρυθμίσεις γεωκωδικοποίησης (FTTH Matching)")
-    geocoder = st.selectbox("Geocoder", ["Nominatim (δωρεάν)", "Google (API key)"])
-    google_key = st.text_input("Google API key", type="password", help="Αν μείνει κενό, χρησιμοποιείται Nominatim.")
-    country = st.text_input("Country code", "gr")
-    lang = st.text_input("Language", "el")
-    throttle = st.slider("Καθυστέρηση (sec) [Nominatim]", 0.5, 2.0, 1.0, 0.5)
-    distance_limit = st.number_input("📏 Μέγιστη απόσταση (m)", min_value=1, max_value=500, value=150)
-
-    st.markdown("---")
-    st.header("Πηγή Επιχειρήσεων")
-    biz_source = st.radio("Επιλογή", ["Upload Excel/CSV", "ΓΕΜΗ (OpenData API)"], index=0)
-
-    st.subheader("🔐 ΓΕΜΗ API")
-    st.caption("Το API key περνάει στο header με όνομα `api_key`.")
-    gemi_key = st.text_input("GΕΜΗ API Key", type="password")
 
 # ========== Uploads & Inputs ==========
 st.subheader("📥 Αρχεία")
