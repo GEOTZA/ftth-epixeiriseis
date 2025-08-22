@@ -405,27 +405,6 @@ def gemi_search(
     tried = []
     last_err = None
 
-  def _gemi_bases():
-    """Return a list of base URLs to try, always with sane defaults."""
-    base = (st.session_state.get("GEMI_BASE_URL") or DEFAULT_GEMI_BASE).strip().rstrip("/")
-    if base.endswith("/opendata"):
-        return [base, base.rsplit("/opendata", 1)[0]]
-    return [base, base + "/opendata"]
-
-            # 1) POST tries
-            for payload in payload_variants_post:
-                tried.append(f"POST {url}  keys={list(payload.keys())}")
-                try:
-                    r = requests.post(url, json=payload, headers=headers, timeout=timeout)
-                    if r.status_code in (400, 404, 415):
-                        last_err = f"{r.status_code} on {url} (POST)"
-                        continue
-                    r.raise_for_status()
-                    st.session_state["GEMI_SEARCH_TRIED"] = tried
-                    return r.json()
-                except requests.RequestException as e:
-                    last_err = str(e)
-
             # 2) GET tries
             for params in payload_variants_get:
                 tried.append(f"GET  {url}  keys={list(params.keys())}")
