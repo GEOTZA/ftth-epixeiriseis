@@ -42,6 +42,8 @@ with st.sidebar:
         dimoi_slugs = st.text_input("Slugs: Δήμοι", value=st.session_state.get("GEMI_SLUGS_DIMOI","municipalities,dimoi,dhmoi,municipal_units"))
         status_slugs = st.text_input("Slugs: Καταστάσεις", value=st.session_state.get("GEMI_SLUGS_STATUS","statuses,status,company_statuses"))
         kad_slugs = st.text_input("Slugs: ΚΑΔ", value=st.session_state.get("GEMI_SLUGS_KAD","kad,kads,activity_codes,kad_codes,nace"))
+        # Search paths
+        search_paths = st.text_input("Paths: Search", value=st.session_state.get("GEMI_SEARCH_PATHS","search,companies/search,companies"))
 
         # Save session
         st.session_state["GEMI_BASE_URL"] = base_url.strip().rstrip("/")
@@ -50,6 +52,7 @@ with st.sidebar:
         st.session_state["GEMI_SLUGS_DIMOI"] = dimoi_slugs
         st.session_state["GEMI_SLUGS_STATUS"] = status_slugs
         st.session_state["GEMI_SLUGS_KAD"] = kad_slugs
+        st.session_state["GEMI_SEARCH_PATHS"] = search_paths
 
         c1, c2 = st.columns(2)
         with c1:
@@ -99,6 +102,7 @@ GEMI_SLUGS = {{
     "statuses": { [x.strip() for x in status_slugs.split(",") if x.strip()] },
     "kad": { [x.strip() for x in kad_slugs.split(",") if x.strip()] },
 }}
+GEMI_SEARCH_PATHS = { [x.strip() for x in search_paths.split(",") if x.strip()] }
 '''.strip()
             st.code(py, language="python")
 
@@ -108,7 +112,7 @@ biz_file = st.file_uploader("Excel/CSV Επιχειρήσεων", type=["xlsx", 
 ftth_file = st.file_uploader("FTTH σημεία Nova (Excel/CSV) – υποστηρίζει ελληνικές στήλες λ/φ και πολλαπλά sheets", type=["xlsx", "csv"])
 prev_geo_file = st.file_uploader("🧠 Προηγούμενα geocoded (προαιρετικά) – Excel/CSV με στήλες: Address, Latitude, Longitude", type=["xlsx", "csv"])
 
-# ---------- Small utils ----------
+# ---------- Helpers ----------
 def load_table(uploaded):
     if uploaded is None: return None
     name = uploaded.name.lower()
@@ -167,7 +171,7 @@ def _to_excel_bytes(df: pd.DataFrame):
     output.seek(0)
     return output
 
-# ---------- GEMI client (auto base + robust fallback) ----------
+# ---------- GEMI client ----------
 def _gemi_headers():
     return {st.session_state["GEMI_HEADER_NAME"]: st.session_state.get("GEMI_API_KEY",""),
             "Accept":"application/json"}
@@ -220,52 +224,72 @@ def gemi_params(kind, *, nomos_id=None, timeout=20):
 
 def gemi_search(*, nomos_id=None, dimos_id=None, status_id=None,
                 name_part=None, kad_list=None, date_from=None, date_to=None,
-                page=1, page_size=200, timeout=60):
+                page=1, page_size=200, timeout=60, soft_fail=False):
+    """
+    Αναζήτηση εταιρειών: δοκιμάζει πολλαπλά paths + payload variants.
+    Αν soft_fail=True και όλα αποτύχουν, επιστρέφει {"items": []}.
+    """
+    headers = _gemi_headers()
     payload_variants = [
-        {"page":page,"page_size":page_size,"nomos_id":nomos_id,"dimos_id":dimos_id,
-         "status_id":status_id,"name_part":name_part,"kad":kad_list or [],
-         "incorporation_date_from":date_from,"incorporation_date_to":date_to,
-         "foundation_date_from":date_from,"foundation_date_to":date_to,
-         "registration_date_from":date_from,"registration_date_to":date_to},
-        {"page":page,"per_page":page_size,"nomosId":nomos_id,"dimosId":dimos_id,
-         "statusId":status_id,"name":name_part,"kad":kad_list or [],
-         "incorporationDateFrom":date_from,"incorporationDateTo":date_to,
-         "foundationDateFrom":date_from,"foundationDateTo":date_to,
-         "registrationDateFrom":date_from,"registrationDateTo":date_to},
+        {"page": page, "page_size": page_size,
+         "nomos_id": nomos_id, "dimos_id": dimos_id,
+         "status_id": status_id, "name_part": name_part, "kad": kad_list or [],
+         "incorporation_date_from": date_from, "incorporation_date_to": date_to,
+         "foundation_date_from": date_from, "foundation_date_to": date_to,
+         "registration_date_from": date_from, "registration_date_to": date_to},
+        {"page": page, "per_page": page_size,
+         "nomosId": nomos_id, "dimosId": dimos_id,
+         "statusId": status_id, "name": name_part, "kad": kad_list or [],
+         "incorporationDateFrom": date_from, "incorporationDateTo": date_to,
+         "foundationDateFrom": date_from, "foundationDateTo": date_to,
+         "registrationDateFrom": date_from, "registrationDateTo": date_to},
     ]
-    paths = ["/search","/companies/search"]
+    raw = st.session_state.get("GEMI_SEARCH_PATHS", "search,companies/search")
+    paths = [("/" + p.strip().lstrip("/")) for p in raw.split(",") if p.strip()]
     last_err = None
+
     for base in _gemi_bases():
         for path in paths:
             url = f"{base}{path}"
+            # POST προσπάθειες
             for payload in payload_variants:
                 try:
-                    r = requests.post(url, json=payload, headers=_gemi_headers(), timeout=timeout)
-                    if r.status_code in (400,404,415):
-                        last_err = f"{r.status_code} on {url} payload={list(payload.keys())}"; continue
+                    r = requests.post(url, json=payload, headers=headers, timeout=timeout)
+                    if r.status_code in (400, 404, 415):
+                        last_err = f"{r.status_code} on {url} payload={list(payload.keys())}"
+                        continue
                     r.raise_for_status()
                     return r.json()
                 except requests.RequestException as e:
                     last_err = str(e)
+            # GET fallback
             try:
-                r = requests.get(url, params=payload_variants[-1], headers=_gemi_headers(), timeout=timeout)
-                if r.ok: return r.json()
+                r = requests.get(url, params=payload_variants[-1], headers=headers, timeout=timeout)
+                if r.ok:
+                    return r.json()
             except requests.RequestException as e:
                 last_err = str(e)
+
+    if soft_fail:
+        st.info("ℹ️ ΓΕΜΗ search soft-fail: δεν απάντησε κανένα search path. Επιστροφή 0 εγγραφών.")
+        return {"items": []}
     raise RuntimeError(f"ΓΕΜΗ: αναζήτηση απέτυχε. Τελευταίο σφάλμα: {last_err}")
 
 def gemi_search_all(*, nomos_id=None, dimos_id=None, status_id=None,
                     name_part=None, kad_list=None, date_from=None, date_to=None,
-                    page_size=200, max_pages=200, sleep_sec=0.3):
+                    page_size=200, max_pages=200, sleep_sec=0.3, soft_fail=False):
     all_items = []
-    for page in range(1, max_pages+1):
-        data = gemi_search(nomos_id=nomos_id,dimos_id=dimos_id,status_id=status_id,
-                           name_part=name_part,kad_list=kad_list,date_from=date_from,date_to=date_to,
-                           page=page,page_size=page_size)
-        items = data.get("items", data if isinstance(data,list) else [])
-        if not items: break
+    for page in range(1, max_pages + 1):
+        data = gemi_search(nomos_id=nomos_id, dimos_id=dimos_id, status_id=status_id,
+                           name_part=name_part, kad_list=kad_list,
+                           date_from=date_from, date_to=date_to,
+                           page=page, page_size=page_size, soft_fail=soft_fail)
+        items = data.get("items", data if isinstance(data, list) else [])
+        if not items:
+            break
         all_items.extend(items)
-        if len(items) < page_size: break
+        if len(items) < page_size:
+            break
         time.sleep(sleep_sec)
     return all_items
 
@@ -328,19 +352,24 @@ if biz_source == "ΓΕΜΗ (OpenData API)":
         st.warning("🔑 Βάλε GΕΜΗ API Key για να ενεργοποιηθεί η αναζήτηση.")
     else:
         st.session_state["GEMI_API_KEY"] = gemi_key
-        # Προσπάθησε πρώτα με παραμετρικά· αν αποτύχουν, fallback UI
+
+        # Έλεγχος αν υπάρχουν παραμετρικά
         param_ok = True
         try:
             nomoi = gemi_params("nomoi")
             nomos_names = [n.get("name") for n in nomoi] or []
-            sel_nomos = st.selectbox("Νομός", nomos_names, index=0 if nomos_names else None)
-            nomos_id = next((n.get("id") for n in nomoi if n.get("name")==sel_nomos), None)
+            if nomos_names:
+                sel_nomos = st.selectbox("Νομός", nomos_names, index=0)
+                nomos_id = next((n.get("id") for n in nomoi if n.get("name")==sel_nomos), None)
+            else:
+                sel_nomos, nomos_id = None, None
+                st.warning("Δεν βρέθηκαν Νομοί από το API.")
 
             statuses = gemi_params("statuses")
             status_names = [s.get("name") for s in statuses]
-            default_status = next((i for i,s in enumerate(statuses) if "ενεργ" in (s.get("name","").lower())), 0)
+            default_status = next((i for i,s in enumerate(statuses) if "ενεργ" in (s.get("name","").lower())), 0) if status_names else 0
             sel_status = st.selectbox("Κατάσταση", status_names, index=default_status if status_names else 0)
-            status_id = next((s.get("id") for s in statuses if s.get("name")==sel_status), None)
+            status_id = next((s.get("id") for s in statuses if s.get("name")==sel_status), None) if status_names else None
 
             dimoi = gemi_params("dimoi", nomos_id=nomos_id) if nomos_id else []
             dimos_names = [d.get("name") for d in dimoi]
@@ -350,27 +379,35 @@ if biz_source == "ΓΕΜΗ (OpenData API)":
 
         except Exception as e:
             param_ok = False
+            sel_nomos = None
             st.warning(f"⚠️ Παραμετρικά μη διαθέσιμα ({e}). Χρήση fallback (χωρίς IDs).")
 
         # Κοινά φίλτρα
         name_part = st.text_input("Κομμάτι επωνυμίας (προαιρετικό)", "")
 
-        try:
-            kad_params = gemi_params("kad") if param_ok else []
-        except Exception:
-            kad_params = []
-        def _kad_label(x):
-            if isinstance(x, dict):
-                code = x.get("code") or x.get("kad") or x.get("id") or x.get("nace") or ""
-                desc = x.get("name") or x.get("title") or x.get("description") or ""
-                return f"{code} — {desc}".strip(" —")
-            return str(x)
-        kad_options = [(_kad_label(k), (k.get("code") or k.get("kad") or k.get("id") or k.get("nace") or "").strip())
-                       for k in kad_params if isinstance(k, dict)]
-        kad_labels = [lbl for (lbl, code) in kad_options if code]
-        kad_label_to_code = {lbl: code for (lbl, code) in kad_options if code}
-        sel_kad_labels = st.multiselect("ΚΑΔ (πολλοί, προαιρετικό)", kad_labels, default=[]) if param_ok else []
-        sel_kads = [kad_label_to_code[lbl] for lbl in sel_kad_labels] if param_ok else st.text_input("ΚΑΔ (comma-sep, π.χ. 47.11,56.10)", "").replace(" ","").split(",") if True else []
+        # ΚΑΔ
+        if param_ok:
+            try:
+                kad_params = gemi_params("kad")
+            except Exception:
+                kad_params = []
+            def _kad_label(x):
+                if isinstance(x, dict):
+                    code = x.get("code") or x.get("kad") or x.get("id") or x.get("nace") or ""
+                    desc = x.get("name") or x.get("title") or x.get("description") or ""
+                    return f"{code} — {desc}".strip(" —")
+                return str(x)
+            kad_options = [(_kad_label(k), (k.get("code") or k.get("kad") or k.get("id") or k.get("nace") or "").strip())
+                           for k in kad_params if isinstance(k, dict)]
+            kad_labels = [lbl for (lbl, code) in kad_options if code]
+            kad_label_to_code = {lbl: code for (lbl, code) in kad_options if code}
+            sel_kad_labels = st.multiselect("ΚΑΔ (πολλοί, προαιρετικό)", kad_labels, default=[])
+            sel_kads = [kad_label_to_code[lbl] for lbl in sel_kad_labels]
+            fallback_kads = []
+        else:
+            sel_kads = []
+            kads_str = st.text_input("ΚΑΔ (comma-sep, π.χ. 47.11,56.10)", "")
+            fallback_kads = [x for x in kads_str.replace(" ","").split(",") if x]
 
         c1,c2 = st.columns(2)
         with c1: date_from = st.text_input("Σύσταση από (YYYY-MM-DD)", "")
@@ -382,25 +419,15 @@ if biz_source == "ΓΕΜΗ (OpenData API)":
             fallback_nomos = st.text_input("Νομός (λέξη/λέξεις, comma-sep)", "")
             fallback_dimos = st.text_input("Δήμος (λέξη/λέξεις, comma-sep, προαιρετικό)", "")
 
-        cA,cB,cC = st.columns(3)
+        cA,cB = st.columns(2)
         with cA:  do_search = st.button("🔎 Αναζήτηση ΓΕΜΗ")
         with cB:  do_export_one = st.button("⬇️ Εξαγωγή Excel (ένα αρχείο, με φίλτρα)")
-        with cC:
-            curl = f"""
-# Παραμετρικά (αν υπάρχουν)
-curl -H "{st.session_state['GEMI_HEADER_NAME']}: {gemi_key}" "{_gemi_bases()[0]}/params/{st.session_state['GEMI_SLUGS_NOMOI'].split(',')[0].strip()}"
-
-# Αναζήτηση (POST)
-curl -X POST -H "Content-Type: application/json" -H "{st.session_state['GEMI_HEADER_NAME']}: {gemi_key}" \\
-  -d '{{"page":1,"page_size":200,"nomos_id":null,"dimos_id":null,"status_id":null,"name_part":"{name_part}","kad":{sel_kads if param_ok else []}}}' \\
-  "{_gemi_bases()[0]}/search"
-""".strip()
-            st.button("📋 Αντιγραφή παραδειγμάτων (cURL)", on_click=lambda: st.session_state.update(_=st.code(curl, language="bash")))
 
         def _apply_client_filters(df: pd.DataFrame) -> pd.DataFrame:
-            if df.empty: return df
-            # Date filter safety
-            if (date_from or date_to) and "incorporation_date" in df:
+            if df is None or df.empty:
+                return df
+            # Ημερομηνίες
+            if (date_from or date_to) and "incorporation_date" in df.columns:
                 dser = pd.to_datetime(df["incorporation_date"], errors="coerce").dt.date
                 if date_from:
                     try: df = df[dser >= pd.to_datetime(date_from, errors="coerce").date()]
@@ -408,12 +435,16 @@ curl -X POST -H "Content-Type: application/json" -H "{st.session_state['GEMI_HEA
                 if date_to:
                     try: df = df[dser <= pd.to_datetime(date_to, errors="coerce").date()]
                     except Exception: pass
-            # KAD filter safety
-            if (not param_ok) and sel_kads:
+            # ΚΑΔ
+            if param_ok and sel_kads:
                 patt = "|".join([re.escape(k) for k in sel_kads if k])
                 if patt:
                     df = df[df["kad_codes"].astype(str).str.contains(patt, na=False, regex=True)]
-            # Area fallback filter
+            if (not param_ok) and fallback_kads:
+                patt = "|".join([re.escape(k) for k in fallback_kads if k])
+                if patt:
+                    df = df[df["kad_codes"].astype(str).str.contains(patt, na=False, regex=True)]
+            # Περιοχή (fallback, string contains μέσα στο city)
             if not param_ok:
                 if fallback_nomos:
                     keys = [x.strip().lower() for x in fallback_nomos.split(",") if x.strip()]
@@ -429,7 +460,7 @@ curl -X POST -H "Content-Type: application/json" -H "{st.session_state['GEMI_HEA
                                name_part=name_part or None,
                                kad_list=(sel_kads if param_ok else None),
                                date_from=(date_from or None), date_to=(date_to or None),
-                               page=1, page_size=200)
+                               page=1, page_size=200, soft_fail=not param_ok)
             items = data.get("items", [])
             return items
 
@@ -442,21 +473,21 @@ curl -X POST -H "Content-Type: application/json" -H "{st.session_state['GEMI_HEA
                     all_items = []
                     for d_id in target_dimoi:
                         items = _search_once(nomos_id, d_id)
-                        for it in items: it["__region_dimos"] = next((nm for nm,_id in dimos_label_to_id.items() if _id==d_id),"")
+                        for it in items:
+                            it["__region_dimos"] = next((nm for nm,_id in dimos_label_to_id.items() if _id==d_id),"")
                         all_items.extend(items)
                 else:
                     all_items = _search_once(nomos_id, None)
             else:
-                # χωρίς IDs -> απλώς τράβα και φιλτράρισε client-side
+                # χωρίς IDs -> τράβα (ό,τι δίνει) και φιλτράρισε client-side
                 all_items = gemi_search_all(nomos_id=None, dimos_id=None, status_id=None,
                                             name_part=name_part or None, kad_list=None,
                                             date_from=(date_from or None), date_to=(date_to or None),
-                                            page_size=200, max_pages=50)
+                                            page_size=200, max_pages=50, soft_fail=True)
 
             gemi_df = gemi_items_to_df(all_items)
-            if param_ok:
-                if "region_nomos" not in gemi_df and not gemi_df.empty:
-                    gemi_df.insert(0, "region_nomos", sel_nomos)
+            if param_ok and sel_nomos and not gemi_df.empty and "region_nomos" not in gemi_df.columns:
+                gemi_df.insert(0, "region_nomos", sel_nomos)
             gemi_df = _apply_client_filters(gemi_df)
 
             if gemi_df.empty:
@@ -478,28 +509,29 @@ curl -X POST -H "Content-Type: application/json" -H "{st.session_state['GEMI_HEA
                         for d_id in target_dimoi:
                             items = gemi_search_all(nomos_id=nomos_id, dimos_id=d_id, status_id=status_id,
                                                     name_part=name_part or None, kad_list=sel_kads or None,
-                                                    date_from=(date_from or None), date_to=(date_to or None))
+                                                    date_from=(date_from or None), date_to=(date_to or None),
+                                                    soft_fail=False)
                             df = gemi_items_to_df(items)
                             if not df.empty:
-                                df.insert(0,"region_nomos", sel_nomos)
+                                df.insert(0,"region_nomos", sel_nomos or "")
                                 df.insert(1,"region_dimos", next((nm for nm,_id in dimos_label_to_id.items() if _id==d_id),""))
                                 dfs.append(df)
                     else:
                         items = gemi_search_all(nomos_id=nomos_id, dimos_id=None, status_id=status_id,
                                                 name_part=name_part or None, kad_list=sel_kads or None,
-                                                date_from=(date_from or None), date_to=(date_to or None))
+                                                date_from=(date_from or None), date_to=(date_to or None),
+                                                soft_fail=False)
                         df = gemi_items_to_df(items)
                         if not df.empty:
-                            df.insert(0,"region_nomos", sel_nomos)
+                            df.insert(0,"region_nomos", sel_nomos or "")
                             df.insert(1,"region_dimos","")
                             dfs.append(df)
                     export_df = pd.concat(dfs, ignore_index=True).drop_duplicates() if dfs else pd.DataFrame()
                 else:
-                    # χωρίς IDs, σε όλη την Ελλάδα και client-side φίλτρα
                     items = gemi_search_all(nomos_id=None, dimos_id=None, status_id=None,
                                             name_part=name_part or None, kad_list=None,
                                             date_from=(date_from or None), date_to=(date_to or None),
-                                            page_size=200, max_pages=200)
+                                            page_size=200, max_pages=200, soft_fail=True)
                     export_df = gemi_items_to_df(items)
 
                 export_df = _apply_client_filters(export_df) if not export_df.empty else export_df
