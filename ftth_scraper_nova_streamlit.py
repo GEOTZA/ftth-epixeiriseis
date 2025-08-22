@@ -7,6 +7,17 @@ from geopy.distance import geodesic
 import io
 import time
 import re
+# --- safe defaults for GEMI config ---
+DEFAULT_GEMI_BASE = "https://publicity.businessportal.gr"
+DEFAULT_HEADER_NAME = "api_key"
+
+# seed session with defaults so code doesn't crash before opening the sidebar
+if "GEMI_BASE_URL" not in st.session_state:
+    st.session_state["GEMI_BASE_URL"] = DEFAULT_GEMI_BASE
+if "GEMI_HEADER_NAME" not in st.session_state:
+    st.session_state["GEMI_HEADER_NAME"] = DEFAULT_HEADER_NAME
+if "GEMI_API_KEY" not in st.session_state:
+    st.session_state["GEMI_API_KEY"] = ""
 
 # ---------- Optional cache ----------
 try:
@@ -268,6 +279,7 @@ def _gemi_headers():
     return h
 
 
+
 def _gemi_candidates(kind: str, *, parent_id=None):
     """kind ∈ {'regions','regional_units','dimoi','statuses','kad'}. parent_id: region_id για regional_units, regunit_id για dimoi."""
     tried = []
@@ -303,21 +315,13 @@ def _gemi_candidates(kind: str, *, parent_id=None):
 def gemi_params(kind, *, parent_id=None, timeout=20):
     urls_tried = []
     last_err = None
-    for base in _gemi_bases():
-        for path in _gemi_candidates(kind, parent_id=parent_id):
-            url = f"{base}{path}"
-            urls_tried.append(url)
-            try:
-                r = requests.get(url, headers=_gemi_headers(), timeout=timeout)
-                if r.status_code == 404:
-                    last_err = f"404 on {url}"
-                    continue
-                r.raise_for_status()
-                st.session_state["GEMI_LAST_TRIED"] = urls_tried
-                return r.json()
-            except requests.RequestException as e:
-                last_err = str(e)
-                continue
+def _gemi_bases():
+    """Return a list of base URLs to try, always with sane defaults."""
+    base = (st.session_state.get("GEMI_BASE_URL") or DEFAULT_GEMI_BASE).strip().rstrip("/")
+    if base.endswith("/opendata"):
+        return [base, base.rsplit("/opendata", 1)[0]]
+    return [base, base + "/opendata"]
+
     st.session_state["GEMI_LAST_TRIED"] = urls_tried
     raise RuntimeError(f"ΓΕΜΗ: δεν βρέθηκε endpoint για '{kind}'. Τελευταίο σφάλμα: {last_err}")
 
