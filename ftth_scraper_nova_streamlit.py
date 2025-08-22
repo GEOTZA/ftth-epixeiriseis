@@ -292,6 +292,6 @@ def gemi_companies_all(**kwargs):
 
     items = []
     for p in range(1, max_pages +
-                   }
-                   ]
+                
+                   
                 
