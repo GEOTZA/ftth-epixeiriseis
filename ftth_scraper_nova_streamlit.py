@@ -1,3 +1,5 @@
+import re
+
 @@
  GEMI_BASE = "https://opendata-api.businessportal.gr/opendata"
  GEMI_HEADER_NAME = "api_key"
@@ -224,8 +226,8 @@
 +                            pass
 +                # client-side kad filter (αν χρειαστεί)
 +                if not gemi_df.empty and sel_kads:
-+                    rx = "|".join([pd.util.hashing.hash_pandas_object(pd.Series([k])).astype(str).iloc[0] for k in sel_kads])  # dummy to ensure str
-+                    patt = "|".join([k.replace(".","\\.").replace("-","\\-") for k in sel_kads])
++                    
++                    patt = "|".join([re.escape(k) for k in sel_kads])
 +                    gemi_df = gemi_df[gemi_df["kad_codes"].astype(str).str.contains(patt, na=False, regex=True)]
                  if gemi_df.empty:
                      st.warning("Δεν βρέθηκαν εγγραφές από ΓΕΜΗ με τα φίλτρα που έβαλες.")
