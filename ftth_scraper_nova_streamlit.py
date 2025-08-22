@@ -20,6 +20,44 @@ st.set_page_config(page_title="FTTH Geocoding & Matching (v6)", layout="wide")
 st.title("📡 FTTH Geocoding & Matching – v6")
 
 # ========== Sidebar ==========
+# --- Sidebar: API (ΓΕΜΗ) Ρυθμίσεις (πάντα ορατό) ---
+with st.expander("🔌 API (ΓΕΜΗ) Ρυθμίσεις", expanded=True):
+    # default values (ASCII, χωρίς κενά)
+    default_base   = "https://opendata-api.businessportal.gr/api/opendata/v1"
+    default_header = "api_key"
+    default_path   = "companies/search"
+
+    gemi_base  = st.text_input("Base URL", value=st.session_state.get("gemi_base", default_base))
+    gemi_hdr   = st.text_input("Header name", value=st.session_state.get("gemi_header", default_header))
+    gemi_path  = st.text_input("Path: Search", value=st.session_state.get("gemi_path", default_path),
+                               help="Συνήθως: companies/search")
+    # Το πραγματικό κλειδί σου (ΟΧΙ demo)
+    gemi_key   = st.text_input("GEMH API Key", type="password",
+                               value=st.session_state.get("gemi_key", ""))
+
+    # save σε session_state για να το χρησιμοποιεί ο κώδικας κάτω
+    st.session_state.update(gemi_base=gemi_base, gemi_header=gemi_hdr,
+                            gemi_path=gemi_path, gemi_key=gemi_key)
+
+    # Μικρό διαγνωστικό
+    if st.button("🧪 Test API (παραμετρικά)"):
+        try:
+            test_urls = [
+                f"{gemi_base}/params/regions",
+                f"{gemi_base}/params/perifereies",
+                f"{gemi_base}/params/peripheries",
+            ]
+            tried = []
+            for u in test_urls:
+                r = requests.get(u, headers={gemi_hdr: gemi_key} if gemi_key else {}, timeout=15)
+                tried.append(u)
+                r.raise_for_status()
+            st.success("OK: params endpoints απάντησαν.")
+            st.code("\n".join(tried), language="text")
+        except Exception as e:
+            st.error(f"Σφάλμα params: {e}")
+
+
 with st.sidebar:
     st.header("Ρυθμίσεις γεωκωδικοποίησης (FTTH Matching)")
     geocoder = st.selectbox("Geocoder", ["Nominatim (δωρεάν)", "Google (API key)"])
