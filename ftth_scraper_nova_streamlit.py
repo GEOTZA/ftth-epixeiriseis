@@ -366,30 +366,32 @@ def gemi_search(
         for path in paths:
             url = f"{base}{path}"
 
-            # POST
+          # POST
             for payload in payload_variants_post:
                 tried.append(f"POST {url} keys={list(payload.keys())}")
                 try:
                     r = requests.post(url, json=payload, headers=headers, timeout=timeout)
-                    if r.status_code in (400, 404, 415):
-                        last_err = f"{r.status_code} on {url} (POST)"
+                    if not r.ok:
+                        # γράψε status + έως 400 chars από το body
+                        last_err = f"POST {r.status_code} on {url} :: {r.text[:400]}"
                         continue
-                    r.raise_for_status()
-                    st.session_state["GEMI_SEARCH_TRIED"] = tried
+                    st.session_state["GEMI_SEARCH_TRIED"] = tried + [f"OK {url}"]
                     return r.json()
                 except requests.RequestException as e:
-                    last_err = str(e)
+                    last_err = f"POST EXC {type(e).__name__}: {e}"
 
             # GET
             for params in payload_variants_get:
                 tried.append(f"GET  {url} keys={list(params.keys())}")
                 try:
                     r = requests.get(url, params=params, headers=headers, timeout=timeout)
-                    if r.ok:
-                        st.session_state["GEMI_SEARCH_TRIED"] = tried
-                        return r.json()
+                    if not r.ok:
+                        last_err = f"GET {r.status_code} on {url} :: {r.text[:400]}"
+                        continue
+                    st.session_state["GEMI_SEARCH_TRIED"] = tried + [f"OK {url}"]
+                    return r.json()
                 except requests.RequestException as e:
-                    last_err = str(e)
+                    last_err = f"GET EXC {type(e).__name__}: {e}"
 
     st.session_state["GEMI_SEARCH_TRIED"] = tried
     if soft_fail:
