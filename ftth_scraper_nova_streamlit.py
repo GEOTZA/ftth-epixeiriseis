@@ -258,6 +258,7 @@ def _to_excel_bytes(df: pd.DataFrame):
     return output
 
 # ---------- GEMI client ----------
+
 def _gemi_headers():
     """
     Headers for opendata/publicity.
@@ -278,11 +279,10 @@ def _gemi_headers():
         h["Referer"] = "https://publicity.businessportal.gr/"
     return h
 
-
-
 def _gemi_candidates(kind: str, *, parent_id=None):
     """kind ∈ {'regions','regional_units','dimoi','statuses','kad'}. parent_id: region_id για regional_units, regunit_id για dimoi."""
     tried = []
+    
     def _add(p): tried.append(p)
 
     if kind == "regions":
@@ -315,6 +315,7 @@ def _gemi_candidates(kind: str, *, parent_id=None):
 def gemi_params(kind, *, parent_id=None, timeout=20):
     urls_tried = []
     last_err = None
+    
 def _gemi_bases():
     """Return a list of base URLs to try, always with sane defaults."""
     base = (st.session_state.get("GEMI_BASE_URL") or DEFAULT_GEMI_BASE).strip().rstrip("/")
