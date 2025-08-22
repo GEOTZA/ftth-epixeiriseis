@@ -147,7 +147,7 @@ def geocode_address(session, address, provider, api_key=None, cc="gr", lang="el"
         if not getattr(session, "cache_disabled", True):
             time.sleep(throttle_sec)
     if (lat is None) and ("greece" not in address.lower()) and ("ελλάδα" not in address.lower()):
-        fallback = f"{address}, Greece}"
+        fallback = f"{address}, Greece"
         if provider.startswith("Google") and api_key:
             lat, lon = geocode_google(session, fallback, api_key, lang=lang)
         else:
