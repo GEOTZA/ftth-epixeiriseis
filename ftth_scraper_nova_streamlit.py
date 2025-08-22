@@ -41,12 +41,14 @@ with st.sidebar:
             gemi_key = "api-docs-key"
 
         # Slugs (comma-separated)
-        nomoi_slugs = st.text_input(
-            "Slugs: Νομοί",
-            value=st.session_state.get(
-                "GEMI_SLUGS_NOMOI",
-                "regions,regional_units,prefectures,nomoi,perifereiakes_enotites,periferiakes_enotites",
-            ),
+        # Ρητά για ιεραρχία: Περιφέρειες, Περιφερειακές Ενότητες, Δήμοι
+        regions_slugs = st.text_input(
+            "Slugs: Περιφέρειες",
+            value=st.session_state.get("GEMI_SLUGS_REGIONS", "regions,perifereies,peripheries"),
+        )
+        regunits_slugs = st.text_input(
+            "Slugs: Περιφερειακές Ενότητες",
+            value=st.session_state.get("GEMI_SLUGS_REGUNITS", "regional_units,perifereiakes_enotites,periferiakes_enotites,prefectures,nomoi"),
         )
         dimoi_slugs = st.text_input(
             "Slugs: Δήμοι",
@@ -57,7 +59,8 @@ with st.sidebar:
             value=st.session_state.get("GEMI_SLUGS_STATUS", "statuses,status,company_statuses"),
         )
         kad_slugs = st.text_input(
-            "Slugs: ΚΑΔ", value=st.session_state.get("GEMI_SLUGS_KAD", "kad,kads,activity_codes,kad_codes,nace")
+            "Slugs: ΚΑΔ",
+            value=st.session_state.get("GEMI_SLUGS_KAD", "kad,kads,activity_codes,kad_codes,nace"),
         )
         # Search paths (θα δοκιμαστούν με τη σειρά)
         search_paths = st.text_input(
@@ -69,7 +72,8 @@ with st.sidebar:
         # Save session
         st.session_state["GEMI_BASE_URL"] = base_url.strip().rstrip("/")
         st.session_state["GEMI_HEADER_NAME"] = header_name.strip()
-        st.session_state["GEMI_SLUGS_NOMOI"] = nomoi_slugs
+        st.session_state["GEMI_SLUGS_REGIONS"] = regions_slugs
+        st.session_state["GEMI_SLUGS_REGUNITS"] = regunits_slugs
         st.session_state["GEMI_SLUGS_DIMOI"] = dimoi_slugs
         st.session_state["GEMI_SLUGS_STATUS"] = status_slugs
         st.session_state["GEMI_SLUGS_KAD"] = kad_slugs
@@ -98,8 +102,17 @@ with st.sidebar:
             else:
                 bases.append(bases[0].rsplit("/opendata", 1)[0])
 
+            # Περιφέρειες / Π.Ε. / Δήμοι / statuses / ΚΑΔ
             for b in bases:
-                for slug in [x.strip() for x in nomoi_slugs.split(",") if x.strip()]:
+                for slug in [x.strip() for x in regions_slugs.split(",") if x.strip()]:
+                    if _try(f"{b}/params/{slug}"):
+                        ok.append(f"{b}/params/{slug}")
+                        break
+                for slug in [x.strip() for x in regunits_slugs.split(",") if x.strip()]:
+                    if _try(f"{b}/params/{slug}"):
+                        ok.append(f"{b}/params/{slug}")
+                        break
+                for slug in [x.strip() for x in dimoi_slugs.split(",") if x.strip()]:
                     if _try(f"{b}/params/{slug}"):
                         ok.append(f"{b}/params/{slug}")
                         break
@@ -125,7 +138,8 @@ with st.sidebar:
 GEMI_BASE = "{st.session_state['GEMI_BASE_URL']}"
 GEMI_HEADER_NAME = "{st.session_state['GEMI_HEADER_NAME']}"
 GEMI_SLUGS = {{
-    "nomoi": { [x.strip() for x in nomoi_slugs.split(",") if x.strip()] },
+    "regions": { [x.strip() for x in regions_slugs.split(",") if x.strip()] },
+    "regional_units": { [x.strip() for x in regunits_slugs.split(",") if x.strip()] },
     "dimoi": { [x.strip() for x in dimoi_slugs.split(",") if x.strip()] },
     "statuses": { [x.strip() for x in status_slugs.split(",") if x.strip()] },
     "kad": { [x.strip() for x in kad_slugs.split(",") if x.strip()] },
@@ -141,8 +155,7 @@ ftth_file = st.file_uploader(
     "FTTH σημεία Nova (Excel/CSV) – υποστηρίζει ελληνικές στήλες λ/φ και πολλαπλά sheets", type=["xlsx", "csv"]
 )
 prev_geo_file = st.file_uploader(
-    "🧠 Προηγούμενα geocoded (προαιρετικά) – Excel/CSV με στήλες: Address, Latitude, Longitude",
-    type=["xlsx", "csv"],
+    "🧠 Προηγούμενα geocoded (προαιρετικά) – Excel/CSV με στήλες: Address, Latitude, Longitude", type=["xlsx", "csv"]
 )
 
 # ---------- Helpers ----------
@@ -154,7 +167,6 @@ def load_table(uploaded):
         return pd.read_csv(uploaded)
     return pd.read_excel(uploaded)
 
-
 def pick_first_series(df: pd.DataFrame, candidates):
     for cand in candidates:
         exact = [c for c in df.columns if c.lower() == cand.lower()]
@@ -165,7 +177,6 @@ def pick_first_series(df: pd.DataFrame, candidates):
         if loose.shape[1] > 0:
             return loose.iloc[:, 0]
     return pd.Series([""] * len(df), index=df.index, dtype="object")
-
 
 def _clean_col(s: str) -> str:
     return (
@@ -187,7 +198,6 @@ def _clean_col(s: str) -> str:
         .strip()
     )
 
-
 def _find_col(df: pd.DataFrame, patterns):
     cleaned = {c: _clean_col(c) for c in df.columns}
     for p in patterns:
@@ -195,7 +205,6 @@ def _find_col(df: pd.DataFrame, patterns):
             if p in cl:
                 return orig
     return None
-
 
 def normalize_ftth(df: pd.DataFrame) -> pd.DataFrame:
     lat_col = _find_col(df, ["latitude", "lat", "πλατος", "γεωγραφικο πλατος", "φ"])
@@ -207,13 +216,11 @@ def normalize_ftth(df: pd.DataFrame) -> pd.DataFrame:
     out["longitude"] = pd.to_numeric(out["longitude"].astype(str).str.replace(",", "."), errors="coerce")
     return out.dropna(subset=["latitude", "longitude"])
 
-
 def _first_key(d: dict, keys, default=""):
     for k in keys:
         if isinstance(d, dict) and k in d and d[k]:
             return d[k]
     return default
-
 
 def _to_excel_bytes(df: pd.DataFrame):
     output = io.BytesIO()
@@ -228,11 +235,9 @@ def _to_excel_bytes(df: pd.DataFrame):
     output.seek(0)
     return output
 
-
 # ---------- GEMI client ----------
 def _gemi_headers():
     return {st.session_state["GEMI_HEADER_NAME"]: st.session_state.get("GEMI_API_KEY", ""), "Accept": "application/json"}
-
 
 def _gemi_bases():
     b = st.session_state["GEMI_BASE_URL"].rstrip("/")
@@ -240,38 +245,43 @@ def _gemi_bases():
         return [b, b.rsplit("/opendata", 1)[0]]
     return [b, b + "/opendata"]
 
-
-def _gemi_candidates(kind: str, *, nomos_id=None):
+def _gemi_candidates(kind: str, *, parent_id=None):
+    """kind ∈ {'regions','regional_units','dimoi','statuses','kad'}. parent_id: region_id για regional_units, regunit_id για dimoi."""
     tried = []
+    def _add(p): tried.append(p)
 
-    def _add(p):
-        tried.append(p)
-
-    if kind == "nomoi":
-        for slug in [x.strip() for x in st.session_state["GEMI_SLUGS_NOMOI"].split(",") if x.strip()]:
+    if kind == "regions":
+        for slug in [x.strip() for x in st.session_state["GEMI_SLUGS_REGIONS"].split(",") if x.strip()]:
             _add(f"/params/{slug}")
+    elif kind == "regional_units":
+        for slug in [x.strip() for x in st.session_state["GEMI_SLUGS_REGUNITS"].split(",") if x.strip()]:
+            if parent_id is None:
+                _add(f"/params/{slug}")
+            else:
+                _add(f"/params/{slug}/{parent_id}")
+                _add(f"/params/{slug}?regionId={parent_id}")
+    elif kind == "dimoi":
+        for slug in [x.strip() for x in st.session_state["GEMI_SLUGS_DIMOI"].split(",") if x.strip()]:
+            if parent_id is None:
+                _add(f"/params/{slug}")
+            else:
+                # parent_id εδώ = regional_unit_id (ή prefectureId)
+                _add(f"/params/{slug}/{parent_id}")
+                _add(f"/params/{slug}?prefectureId={parent_id}")
+                _add(f"/params/{slug}?regionalUnitId={parent_id}")
     elif kind == "statuses":
         for slug in [x.strip() for x in st.session_state["GEMI_SLUGS_STATUS"].split(",") if x.strip()]:
             _add(f"/params/{slug}")
     elif kind == "kad":
         for slug in [x.strip() for x in st.session_state["GEMI_SLUGS_KAD"].split(",") if x.strip()]:
             _add(f"/params/{slug}")
-    elif kind == "dimoi":
-        for slug in [x.strip() for x in st.session_state["GEMI_SLUGS_DIMOI"].split(",") if x.strip()]:
-            if nomos_id is None:
-                _add(f"/params/{slug}")
-            else:
-                _add(f"/params/{slug}/{nomos_id}")
-                _add(f"/params/{slug}?nomosId={nomos_id}")
-                _add(f"/params/{slug}?prefectureId={nomos_id}")
     return tried
 
-
-def gemi_params(kind, *, nomos_id=None, timeout=20):
+def gemi_params(kind, *, parent_id=None, timeout=20):
     urls_tried = []
     last_err = None
     for base in _gemi_bases():
-        for path in _gemi_candidates(kind, nomos_id=nomos_id):
+        for path in _gemi_candidates(kind, parent_id=parent_id):
             url = f"{base}{path}"
             urls_tried.append(url)
             try:
@@ -288,10 +298,11 @@ def gemi_params(kind, *, nomos_id=None, timeout=20):
     st.session_state["GEMI_LAST_TRIED"] = urls_tried
     raise RuntimeError(f"ΓΕΜΗ: δεν βρέθηκε endpoint για '{kind}'. Τελευταίο σφάλμα: {last_err}")
 
-
 def gemi_search(
     *,
-    nomos_id=None,
+    region_id=None,
+    regunit_id=None,
+    nomos_id=None,        # συμβατότητα
     dimos_id=None,
     status_id=None,
     name_part=None,
@@ -310,12 +321,20 @@ def gemi_search(
     """
     headers = _gemi_headers()
 
+    # Snake_case & camelCase payloads με πολλά συνώνυμα
     payload_variants_post = [
         {
             "page": page,
             "page_size": page_size,
-            "nomos_id": nomos_id,
+            # ιεραρχία περιοχής
+            "region_id": region_id,
+            "perifereia_id": region_id,
+            "regional_unit_id": regunit_id or nomos_id,
+            "perifereiaki_enotita_id": regunit_id or nomos_id,
+            "prefecture_id": regunit_id or nomos_id,
+            "nomos_id": nomos_id,  # συμβατό
             "dimos_id": dimos_id,
+            # λοιπά φίλτρα
             "status_id": status_id,
             "name_part": name_part,
             "kad": kad_list or [],
@@ -329,6 +348,9 @@ def gemi_search(
         {
             "page": page,
             "per_page": page_size,
+            "regionId": region_id,
+            "regionalUnitId": regunit_id or nomos_id,
+            "prefectureId": regunit_id or nomos_id,
             "nomosId": nomos_id,
             "dimosId": dimos_id,
             "statusId": status_id,
@@ -343,11 +365,11 @@ def gemi_search(
         },
     ]
 
-    # GET παραλλαγές (μερικοί servers δέχονται GET με λίγες/πολλές παραμέτρους)
+    # GET παραλλαγές
     payload_variants_get = [
         {"page": page, "per_page": page_size},
         {"page": page, "page_size": page_size},
-        payload_variants_post[-1],  # πλήρες GET
+        payload_variants_post[-1],
     ]
 
     raw = st.session_state.get("GEMI_SEARCH_PATHS", "companies,search,companies/search")
@@ -390,9 +412,10 @@ def gemi_search(
         return {"items": []}
     raise RuntimeError(f"ΓΕΜΗ: αναζήτηση απέτυχε. Τελευταίο σφάλμα: {last_err}")
 
-
 def gemi_search_all(
     *,
+    region_id=None,
+    regunit_id=None,
     nomos_id=None,
     dimos_id=None,
     status_id=None,
@@ -408,6 +431,8 @@ def gemi_search_all(
     all_items = []
     for page in range(1, max_pages + 1):
         data = gemi_search(
+            region_id=region_id,
+            regunit_id=regunit_id,
             nomos_id=nomos_id,
             dimos_id=dimos_id,
             status_id=status_id,
@@ -428,7 +453,6 @@ def gemi_search_all(
         time.sleep(sleep_sec)
     return all_items
 
-
 def gemi_items_to_df(items):
     rows = []
     for it in items:
@@ -441,36 +465,28 @@ def gemi_items_to_df(items):
             kad_join = ";".join([_x(x) for x in raw_kads if x])
         else:
             kad_join = str(raw_kads or "")
-        rows.append(
-            {
-                "name": _first_key(it, ["name", "company_name", "commercial_name", "registered_name"]),
-                "afm": _first_key(it, ["afm", "vat_number", "tin"]),
-                "gemi": _first_key(it, ["gemi_number", "registry_number", "commercial_registry_no"]),
-                "legal_form": _first_key(it, ["legal_form", "company_type", "form"]),
-                "status": _first_key(it, ["status", "company_status", "status_name"]),
-                "incorporation_date": _first_key(
-                    it,
-                    ["incorporation_date", "foundation_date", "establishment_date", "founded_at", "registration_date"],
-                ),
-                "address": _first_key(it, ["address", "postal_address", "registered_address", "address_line"]),
-                "city": _first_key(it, ["municipality", "dimos_name", "city", "town"]),
-                "postal_code": _first_key(it, ["postal_code", "zip", "tk", "postcode"]),
-                "phone": _first_key(it, ["phone", "telephone", "contact_phone", "phone_number"]),
-                "email": _first_key(it, ["email", "contact_email", "email_address"]),
-                "website": _first_key(it, ["website", "site", "url", "homepage"]),
-                "kad_codes": kad_join,
-            }
-        )
+        rows.append({
+            "name":  _first_key(it, ["name","company_name","commercial_name","registered_name"]),
+            "afm":   _first_key(it, ["afm","vat_number","tin"]),
+            "gemi":  _first_key(it, ["gemi_number","registry_number","commercial_registry_no"]),
+            "legal_form": _first_key(it, ["legal_form","company_type","form"]),
+            "status":     _first_key(it, ["status","company_status","status_name"]),
+            "incorporation_date": _first_key(it, [
+                "incorporation_date","foundation_date","establishment_date","founded_at","registration_date"
+            ]),
+            "address": _first_key(it, ["address","postal_address","registered_address","address_line"]),
+            "city":    _first_key(it, ["municipality","dimos_name","city","town"]),
+            "postal_code": _first_key(it, ["postal_code","zip","tk","postcode"]),
+            "phone":   _first_key(it, ["phone","telephone","contact_phone","phone_number"]),
+            "email":   _first_key(it, ["email","contact_email","email_address"]),
+            "website": _first_key(it, ["website","site","url","homepage"]),
+            "kad_codes": kad_join,
+        })
     df = pd.DataFrame(rows)
     if not df.empty:
         df["incorporation_date"] = df["incorporation_date"].astype(str).str.strip()
-        df = (
-            df.drop_duplicates()
-            .sort_values(["name", "city", "postal_code"], na_position="last")
-            .reset_index(drop=True)
-        )
+        df = df.drop_duplicates().sort_values(["name","city","postal_code"], na_position="last").reset_index(drop=True)
     return df
-
 
 # ---------- FTTH load (Nova) ----------
 ftth_df = None
@@ -482,8 +498,7 @@ if ftth_file is not None:
         df_coords = pd.read_excel(xls, sheet_name=sheet_coords)
         ftth_df = normalize_ftth(df_coords)
     else:
-        raw = load_table(ftth_file)
-        ftth_df = normalize_ftth(raw)
+        raw = load_table(ftth_file); ftth_df = normalize_ftth(raw)
 
 # ---------- Biz source ----------
 biz_df = None
@@ -498,92 +513,119 @@ if biz_source == "ΓΕΜΗ (OpenData API)":
     else:
         st.session_state["GEMI_API_KEY"] = gemi_key
 
-        # Προκαθορισμένες τιμές για να είναι δεσμευμένες μεταβλητές
-        status_id = None
-        sel_nomos = None
-        dimos_label_to_id = {}
-        sel_dimoi = []
-
-        # Έλεγχος παραμετρικών (nomoi/statuses/dimoi)
+        # Προσπάθεια φόρτωσης παραμετρικών για ιεραρχία
         param_ok = True
         try:
-            nomoi = gemi_params("nomoi")
-            nomos_names = [n.get("name") for n in nomoi] or []
-            if nomos_names:
-                sel_nomos = st.selectbox("Νομός", nomos_names, index=0)
-                nomos_id = next((n.get("id") for n in nomoi if n.get("name") == sel_nomos), None)
-            else:
-                nomos_id = None
-                st.warning("Δεν βρέθηκαν Νομοί από το API.")
-
-            statuses = gemi_params("statuses")
-            status_names = [s.get("name") for s in statuses]
-            default_status = (
-                next((i for i, s in enumerate(statuses) if "ενεργ" in (s.get("name", "").lower())), 0)
-                if status_names
-                else 0
-            )
-            sel_status = st.selectbox("Κατάσταση", status_names, index=default_status if status_names else 0)
-            status_id = next((s.get("id") for s in statuses if s.get("name") == sel_status), None) if status_names else None
-
-            dimoi = gemi_params("dimoi", nomos_id=nomos_id) if nomos_id else []
-            dimos_names = [d.get("name") for d in dimoi]
-            ALL_DM = "— Όλοι οι Δήμοι —"
-            dimos_label_to_id = {d.get("name"): d.get("id") for d in dimoi}
-            sel_dimoi = st.multiselect("Δήμοι (πολλαπλή επιλογή)", [ALL_DM] + dimos_names, default=[ALL_DM])
-
+            regions = gemi_params("regions")
+            region_names = [r.get("name") for r in regions] or []
+            region_name_to_id = {r.get("name"): r.get("id") for r in regions if isinstance(r, dict)}
         except Exception as e:
             param_ok = False
-            nomos_id = None
-            st.warning(f"⚠️ Παραμετρικά μη διαθέσιμα ({e}). Χρήση fallback (χωρίς IDs).")
+            regions = []; region_names = []; region_name_to_id = {}
+            st.warning(f"⚠️ Παραμετρικά μη διαθέσιμα (Περιφέρειες): {e}. Χρήση fallback (χωρίς IDs).")
 
-        # Κοινά φίλτρα
+        # ----- UI φίλτρα -----
         name_part = st.text_input("Κομμάτι επωνυμίας (προαιρετικό)", "")
 
-        # ΚΑΔ επιλογές
-        if param_ok:
-            try:
-                kad_params = gemi_params("kad")
-            except Exception:
-                kad_params = []
+        sel_kads = []
+        fallback_kads = []
+        try:
+            kad_params = gemi_params("kad") if param_ok else []
+        except Exception:
+            kad_params = []
+        if kad_params:
             def _kad_label(x):
                 if isinstance(x, dict):
                     code = x.get("code") or x.get("kad") or x.get("id") or x.get("nace") or ""
                     desc = x.get("name") or x.get("title") or x.get("description") or ""
                     return f"{code} — {desc}".strip(" —")
                 return str(x)
-            kad_options = [
-                (_kad_label(k), (k.get("code") or k.get("kad") or k.get("id") or k.get("nace") or "").strip())
-                for k in kad_params
-                if isinstance(k, dict)
-            ]
+            kad_options = [(_kad_label(k), (k.get("code") or k.get("kad") or k.get("id") or k.get("nace") or "").strip())
+                           for k in kad_params if isinstance(k, dict)]
             kad_labels = [lbl for (lbl, code) in kad_options if code]
             kad_label_to_code = {lbl: code for (lbl, code) in kad_options if code}
             sel_kad_labels = st.multiselect("ΚΑΔ (πολλοί, προαιρετικό)", kad_labels, default=[])
             sel_kads = [kad_label_to_code[lbl] for lbl in sel_kad_labels]
-            fallback_kads = []
         else:
-            sel_kads = []
             kads_str = st.text_input("ΚΑΔ (comma-sep, π.χ. 47.11,56.10)", "")
             fallback_kads = [x for x in kads_str.replace(" ", "").split(",") if x]
 
         c1, c2 = st.columns(2)
-        with c1:
-            date_from = st.text_input("Σύσταση από (YYYY-MM-DD)", "")
-        with c2:
-            date_to = st.text_input("Σύσταση έως (YYYY-MM-DD)", "")
+        with c1: date_from = st.text_input("Σύσταση από (YYYY-MM-DD)", "")
+        with c2: date_to   = st.text_input("Σύσταση έως (YYYY-MM-DD)", "")
 
-        # Fallback text filters για περιοχή
-        if not param_ok:
+        # ιεραρχία περιοχής (όταν param_ok=True)
+        selected_region_ids = []
+        selected_regunit_ids = []
+        selected_dimos_ids = []
+
+        if param_ok and region_names:
+            ALL_REG = "— Όλες οι Περιφέρειες —"
+            sel_regions = st.multiselect("Περιφέρειες", [ALL_REG] + region_names, default=[ALL_REG])
+            if sel_regions and not (len(sel_regions) == 1 and ALL_REG in sel_regions):
+                selected_region_ids = [region_name_to_id[x] for x in sel_regions if x in region_name_to_id]
+
+            # Περιφερειακές Ενότητες με βάση Περιφέρειες (αν επιλέχθηκαν)
+            regunits = []
+            if selected_region_ids:
+                for rid in selected_region_ids:
+                    try:
+                        regunits.extend(gemi_params("regional_units", parent_id=rid) or [])
+                    except Exception:
+                        pass
+            else:
+                try:
+                    regunits = gemi_params("regional_units")
+                except Exception:
+                    regunits = []
+
+            regunit_names = [x.get("name") for x in regunits if isinstance(x, dict)]
+            regunit_name_to_id = {x.get("name"): x.get("id") for x in regunits if isinstance(x, dict)}
+            ALL_RU = "— Όλες οι Π.Ε. —"
+            sel_reg_units = st.multiselect("Περιφερειακές Ενότητες", [ALL_RU] + regunit_names, default=[ALL_RU])
+            if sel_reg_units and not (len(sel_reg_units) == 1 and ALL_RU in sel_reg_units):
+                selected_regunit_ids = [regunit_name_to_id[x] for x in sel_reg_units if x in regunit_name_to_id]
+
+            # Δήμοι με βάση Π.Ε. (αν επιλέχθηκαν)
+            dimoi = []
+            if selected_regunit_ids:
+                for ruid in selected_regunit_ids:
+                    try:
+                        dimoi.extend(gemi_params("dimoi", parent_id=ruid) or [])
+                    except Exception:
+                        pass
+            else:
+                try:
+                    dimoi = gemi_params("dimoi")
+                except Exception:
+                    dimoi = []
+            dimos_names = [d.get("name") for d in dimoi if isinstance(d, dict)]
+            dimos_name_to_id = {d.get("name"): d.get("id") for d in dimoi if isinstance(d, dict)}
+            ALL_DM = "— Όλοι οι Δήμοι —"
+            sel_dimoi = st.multiselect("Δήμοι (πολλαπλή επιλογή)", [ALL_DM] + dimos_names, default=[ALL_DM])
+            if sel_dimoi and not (len(sel_dimoi) == 1 and ALL_DM in sel_dimoi):
+                selected_dimos_ids = [dimos_name_to_id[x] for x in sel_dimoi if x in dimos_name_to_id]
+        else:
             st.markdown("**Φίλτρα περιοχής (fallback, string contains):**")
-            fallback_nomos = st.text_input("Νομός (λέξη/λέξεις, comma-sep)", "")
-            fallback_dimos = st.text_input("Δήμος (λέξη/λέξεις, comma-sep, προαιρετικό)", "")
+            fallback_region = st.text_input("Περιφέρεια (λέξη/λέξεις, comma-sep)", "")
+            fallback_regunit = st.text_input("Π.Ε. (λέξη/λέξεις, comma-sep)", "")
+            fallback_dimos = st.text_input("Δήμος (λέξη/λέξεις, comma-sep)", "")
+
+        # Καταστάσεις (αν υπάρχουν)
+        status_id = None
+        try:
+            statuses = gemi_params("statuses") if param_ok else []
+        except Exception:
+            statuses = []
+        if statuses:
+            status_names = [s.get("name") for s in statuses]
+            default_status = next((i for i, s in enumerate(statuses) if "ενεργ" in (s.get("name", "").lower())), 0)
+            sel_status = st.selectbox("Κατάσταση", status_names, index=default_status)
+            status_id = next((s.get("id") for s in statuses if s.get("name") == sel_status), None)
 
         cA, cB = st.columns(2)
-        with cA:
-            do_search = st.button("🔎 Αναζήτηση ΓΕΜΗ")
-        with cB:
-            do_export_one = st.button("⬇️ Εξαγωγή Excel (ένα αρχείο, με φίλτρα)")
+        with cA:  do_search = st.button("🔎 Αναζήτηση ΓΕΜΗ")
+        with cB:  do_export_one = st.button("⬇️ Εξαγωγή Excel (ένα αρχείο, με φίλτρα)")
 
         def _apply_client_filters(df: pd.DataFrame) -> pd.DataFrame:
             if df is None or df.empty:
@@ -592,84 +634,64 @@ if biz_source == "ΓΕΜΗ (OpenData API)":
             if (date_from or date_to) and "incorporation_date" in df.columns:
                 dser = pd.to_datetime(df["incorporation_date"], errors="coerce").dt.date
                 if date_from:
-                    try:
-                        df = df[dser >= pd.to_datetime(date_from, errors="coerce").date()]
-                    except Exception:
-                        pass
+                    try: df = df[dser >= pd.to_datetime(date_from, errors="coerce").date()]
+                    except Exception: pass
                 if date_to:
-                    try:
-                        df = df[dser <= pd.to_datetime(date_to, errors="coerce").date()]
-                    except Exception:
-                        pass
+                    try: df = df[dser <= pd.to_datetime(date_to, errors="coerce").date()]
+                    except Exception: pass
             # ΚΑΔ
-            if param_ok and sel_kads:
+            if sel_kads:
                 patt = "|".join([re.escape(k) for k in sel_kads if k])
                 if patt:
                     df = df[df["kad_codes"].astype(str).str.contains(patt, na=False, regex=True)]
-            if (not param_ok) and fallback_kads:
+            if fallback_kads:
                 patt = "|".join([re.escape(k) for k in fallback_kads if k])
                 if patt:
                     df = df[df["kad_codes"].astype(str).str.contains(patt, na=False, regex=True)]
             # Περιοχή (fallback, string contains μέσα στο city)
             if not param_ok:
-                if fallback_nomos:
-                    keys = [x.strip().lower() for x in fallback_nomos.split(",") if x.strip()]
-                    if keys:
+                if "city" in df.columns:
+                    if 'fallback_region' in locals() and fallback_region:
+                        keys = [x.strip().lower() for x in fallback_region.split(",") if x.strip()]
                         df = df[df["city"].astype(str).str.lower().str.contains("|".join([re.escape(k) for k in keys]), na=False)]
-                if fallback_dimos:
-                    keys = [x.strip().lower() for x in fallback_dimos.split(",") if x.strip()]
-                    if keys:
+                    if 'fallback_regunit' in locals() and fallback_regunit:
+                        keys = [x.strip().lower() for x in fallback_regunit.split(",") if x.strip()]
+                        df = df[df["city"].astype(str).str.lower().str.contains("|".join([re.escape(k) for k in keys]), na=False)]
+                    if 'fallback_dimos' in locals() and fallback_dimos:
+                        keys = [x.strip().lower() for x in fallback_dimos.split(",") if x.strip()]
                         df = df[df["city"].astype(str).str.lower().str.contains("|".join([re.escape(k) for k in keys]), na=False)]
             return df
 
-        def _search_once(nomos_id=None, dimos_id=None):
-            data = gemi_search(
-                nomos_id=nomos_id,
-                dimos_id=dimos_id,
-                status_id=(status_id if param_ok else None),
-                name_part=name_part or None,
-                kad_list=(sel_kads if param_ok else None),
-                date_from=(date_from or None),
-                date_to=(date_to or None),
-                page=1,
-                page_size=200,
-                soft_fail=not param_ok,
-            )
-            items = data.get("items", [])
-            return items
+        def _search_scope():
+            # Προτεραιότητα: Δήμοι -> Π.Ε. -> Περιφέρειες -> χωρίς IDs
+            if selected_dimos_ids:
+                return [{"dimos_id": d_id} for d_id in selected_dimos_ids]
+            if selected_regunit_ids:
+                return [{"regunit_id": ru_id} for ru_id in selected_regunit_ids]
+            if selected_region_ids:
+                return [{"region_id": r_id} for r_id in selected_region_ids]
+            return [dict()]  # χωρίς IDs
 
         if do_search:
-            if param_ok:
-                target_dimoi = None
-                if sel_dimoi and not (len(sel_dimoi) == 1 and "— Όλοι" in sel_dimoi):
-                    target_dimoi = [dimos_label_to_id[x] for x in sel_dimoi if x in dimos_label_to_id]
-                if target_dimoi:
-                    all_items = []
-                    for d_id in target_dimoi:
-                        items = _search_once(nomos_id, d_id)
-                        for it in items:
-                            it["__region_dimos"] = next((nm for nm, _id in dimos_label_to_id.items() if _id == d_id), "")
-                        all_items.extend(items)
-                else:
-                    all_items = _search_once(nomos_id, None)
-            else:
-                # χωρίς IDs -> τράβα (ό,τι δίνει) και φιλτράρισε client-side
-                all_items = gemi_search_all(
-                    nomos_id=None,
-                    dimos_id=None,
-                    status_id=None,
+            all_items = []
+            for scope in _search_scope():
+                data = gemi_search(
+                    region_id=scope.get("region_id"),
+                    regunit_id=scope.get("regunit_id"),
+                    dimos_id=scope.get("dimos_id"),
+                    status_id=status_id,
                     name_part=name_part or None,
-                    kad_list=None,
+                    kad_list=sel_kads or None,
                     date_from=(date_from or None),
                     date_to=(date_to or None),
+                    page=1,
                     page_size=200,
-                    max_pages=50,
-                    soft_fail=True,
+                    soft_fail=not param_ok,
                 )
+                items = data.get("items", [])
+                all_items.extend(items)
 
             gemi_df = gemi_items_to_df(all_items)
-            if param_ok and sel_nomos and not gemi_df.empty and "region_nomos" not in gemi_df.columns:
-                gemi_df.insert(0, "region_nomos", sel_nomos)
             gemi_df = _apply_client_filters(gemi_df)
 
             if gemi_df.empty:
@@ -677,67 +699,34 @@ if biz_source == "ΓΕΜΗ (OpenData API)":
             else:
                 st.success(f"Βρέθηκαν {len(gemi_df)} εγγραφές.")
                 st.dataframe(gemi_df, use_container_width=True)
-                st.download_button("⬇️ Κατέβασμα επιχειρήσεων ΓΕΜΗ (Excel)", _to_excel_bytes(gemi_df), file_name="gemi_businesses.xlsx")
+                st.download_button(
+                    "⬇️ Κατέβασμα επιχειρήσεων ΓΕΜΗ (Excel)",
+                    _to_excel_bytes(gemi_df),
+                    file_name="gemi_businesses.xlsx",
+                )
 
         if do_export_one:
             with st.spinner("Εξαγωγή…"):
-                if param_ok:
-                    target_dimoi = None
-                    if sel_dimoi and not (len(sel_dimoi) == 1 and "— Όλοι" in sel_dimoi):
-                        target_dimoi = [dimos_label_to_id[x] for x in sel_dimoi if x in dimos_label_to_id]
-                    dfs = []
-                    if target_dimoi:
-                        for d_id in target_dimoi:
-                            items = gemi_search_all(
-                                nomos_id=nomos_id,
-                                dimos_id=d_id,
-                                status_id=status_id,
-                                name_part=name_part or None,
-                                kad_list=sel_kads or None,
-                                date_from=(date_from or None),
-                                date_to=(date_to or None),
-                                soft_fail=False,
-                            )
-                            df = gemi_items_to_df(items)
-                            if not df.empty:
-                                df.insert(0, "region_nomos", sel_nomos or "")
-                                df.insert(
-                                    1, "region_dimos", next((nm for nm, _id in dimos_label_to_id.items() if _id == d_id), "")
-                                )
-                                dfs.append(df)
-                    else:
-                        items = gemi_search_all(
-                            nomos_id=nomos_id,
-                            dimos_id=None,
-                            status_id=status_id,
-                            name_part=name_part or None,
-                            kad_list=sel_kads or None,
-                            date_from=(date_from or None),
-                            date_to=(date_to or None),
-                            soft_fail=False,
-                        )
-                        df = gemi_items_to_df(items)
-                        if not df.empty:
-                            df.insert(0, "region_nomos", sel_nomos or "")
-                            df.insert(1, "region_dimos", "")
-                            dfs.append(df)
-                    export_df = pd.concat(dfs, ignore_index=True).drop_duplicates() if dfs else pd.DataFrame()
-                else:
+                dfs = []
+                scopes = _search_scope()
+                for scope in scopes:
                     items = gemi_search_all(
-                        nomos_id=None,
-                        dimos_id=None,
-                        status_id=None,
+                        region_id=scope.get("region_id"),
+                        regunit_id=scope.get("regunit_id"),
+                        dimos_id=scope.get("dimos_id"),
+                        status_id=status_id,
                         name_part=name_part or None,
-                        kad_list=None,
+                        kad_list=sel_kads or None,
                         date_from=(date_from or None),
                         date_to=(date_to or None),
-                        page_size=200,
-                        max_pages=200,
-                        soft_fail=True,
+                        soft_fail=not param_ok,
                     )
-                    export_df = gemi_items_to_df(items)
-
+                    df = gemi_items_to_df(items)
+                    if not df.empty:
+                        dfs.append(df)
+                export_df = pd.concat(dfs, ignore_index=True).drop_duplicates() if dfs else pd.DataFrame()
                 export_df = _apply_client_filters(export_df) if not export_df.empty else export_df
+
                 if export_df.empty:
                     st.warning("Δεν βρέθηκαν εγγραφές για εξαγωγή.")
                 else:
@@ -769,14 +758,12 @@ if CACHE_OK:
 session = requests.Session()
 session.headers.update({"User-Agent": "ftth-app/1.0 (+contact: user)"})
 
-
 def geocode_nominatim(address, cc="gr", lang="el"):
     params = {"q": address, "format": "json", "limit": 1, "countrycodes": cc, "accept-language": lang}
     r = session.get("https://nominatim.openstreetmap.org/search", params=params, timeout=15)
     r.raise_for_status()
     data = r.json()
     return (float(data[0]["lat"]), float(data[0]["lon"])) if data else (None, None)
-
 
 def geocode_google(address, api_key, lang="el"):
     params = {"address": address, "key": api_key, "language": lang}
@@ -788,22 +775,18 @@ def geocode_google(address, api_key, lang="el"):
         return float(loc["lat"]), float(loc["lng"])
     return (None, None)
 
-
 def geocode_address(address, provider, api_key=None, cc="gr", lang="el", throttle_sec=1.0):
     if provider.startswith("Google") and api_key:
         lat, lon = geocode_google(address, api_key, lang=lang)
     else:
-        lat, lon = geocode_nominatim(address, cc, lang)
-        time.sleep(throttle_sec)
+        lat, lon = geocode_nominatim(address, cc, lang); time.sleep(throttle_sec)
     if lat is None and "greece" not in address.lower() and "ελλάδα" not in address.lower():
         fallback = f"{address}, Greece"
         if provider.startswith("Google") and api_key:
             lat, lon = geocode_google(fallback, api_key, lang=lang)
         else:
-            lat, lon = geocode_nominatim(fallback, cc, lang)
-            time.sleep(throttle_sec)
+            lat, lon = geocode_nominatim(fallback, cc, lang); time.sleep(throttle_sec)
     return lat, lon
-
 
 # ========== Main ==========
 start = st.button("🚀 Ξεκίνα geocoding & matching")
@@ -812,17 +795,13 @@ if start and biz_df is not None and ftth_df is not None:
     work = biz_df.copy()
 
     # Επιλογή πιθανών στηλών διεύθυνσης/πόλης
-    addr_series = pick_first_series(
-        work, ["address", "site.company_insights.address", "διεύθυνση", "οδός", "διευθυνση"]
-    )
-    city_series = pick_first_series(work, ["city", "site.company_insights.city", "πόλη"])
+    addr_series = pick_first_series(work, ["address","site.company_insights.address","διεύθυνση","οδός","διευθυνση"])
+    city_series = pick_first_series(work, ["city","site.company_insights.city","πόλη"])
 
     # Τελική διεύθυνση προς geocoding
     base_addr = addr_series.astype(str).str.strip()
     from_input_city = city_series.astype(str).str.strip()
-    work["Address"] = (base_addr + (", " + from_input_city).where(from_input_city.ne(""), "")).str.replace(
-        r"\s+", " ", regex=True
-    )
+    work["Address"] = (base_addr + (", " + from_input_city).where(from_input_city.ne(""), "")).str.replace(r"\s+", " ", regex=True)
 
     # Αφαίρεση εντελώς κενών διευθύνσεων
     work = work[work["Address"].str.len() > 3].copy()
@@ -834,20 +813,14 @@ if start and biz_df is not None and ftth_df is not None:
     # cache από prev_df (αν δόθηκε)
     geo_map = {}
     prev_df = load_table(prev_geo_file) if prev_geo_file is not None else None
-    if prev_df is not None and {"Address", "Latitude", "Longitude"}.issubset(
-        {c.title() if c.islower() else c for c in prev_df.columns}
-    ):
+    if prev_df is not None and {"Address","Latitude","Longitude"}.issubset({c.title() if c.islower() else c for c in prev_df.columns}):
         cols = {c.lower(): c for c in prev_df.columns}
-        p = prev_df.rename(
-            columns={
-                cols.get("address", "address"): "Address",
-                cols.get("latitude", "latitude"): "Latitude",
-                cols.get("longitude", "longitude"): "Longitude",
-            }
-        )
-        p["Latitude"] = pd.to_numeric(p["Latitude"].astype(str).str.replace(",", "."), errors="coerce")
+        p = prev_df.rename(columns={cols.get("address","address"): "Address",
+                                    cols.get("latitude","latitude"): "Latitude",
+                                    cols.get("longitude","longitude"): "Longitude"})
+        p["Latitude"]  = pd.to_numeric(p["Latitude"].astype(str).str.replace(",", "."), errors="coerce")
         p["Longitude"] = pd.to_numeric(p["Longitude"].astype(str).str.replace(",", "."), errors="coerce")
-        p = p.dropna(subset=["Latitude", "Longitude"])
+        p = p.dropna(subset=["Latitude","Longitude"])
         for _, r in p.iterrows():
             geo_map[str(r["Address"])] = (float(r["Latitude"]), float(r["Longitude"]))
 
@@ -867,55 +840,49 @@ if start and biz_df is not None and ftth_df is not None:
                 errs += 1
                 lat, lon = (None, None)
 
-        work.at[idx, "Latitude"] = lat
+        work.at[idx, "Latitude"]  = lat
         work.at[idx, "Longitude"] = lon
-        progress.progress(i / max(1, total), text=f"{i} / {total} γεωκωδικοποιημένα...")
+        progress.progress(i/max(1,total), text=f"{i} / {total} γεωκωδικοποιημένα...")
 
-    # Κόμμα/τελεία -> float & καθάρισμα
-    work["Latitude"] = pd.to_numeric(work["Latitude"].astype(str).str.replace(",", "."), errors="coerce")
+    work["Latitude"]  = pd.to_numeric(work["Latitude"].astype(str).str.replace(",", "."), errors="coerce")
     work["Longitude"] = pd.to_numeric(work["Longitude"].astype(str).str.replace(",", "."), errors="coerce")
 
     merged = work.copy()
 
     # ----- Matching -----
-    ftth_points = ftth_df[["latitude", "longitude"]].dropna().to_numpy()
+    ftth_points = ftth_df[["latitude","longitude"]].dropna().to_numpy()
     matches = []
-    for _, row in merged.dropna(subset=["Latitude", "Longitude"]).iterrows():
+    for _, row in merged.dropna(subset=["Latitude","Longitude"]).iterrows():
         try:
             biz_lat = float(str(row["Latitude"]).replace(",", "."))
             biz_lon = float(str(row["Longitude"]).replace(",", "."))
         except Exception:
             continue
         biz_coords = (biz_lat, biz_lon)
-
         for ft_lat, ft_lon in ftth_points:
             d = geodesic(biz_coords, (float(ft_lat), float(ft_lon))).meters
             if d <= distance_limit:
-                matches.append(
-                    {
-                        "name": row.get("name", ""),
-                        "Address": row["Address"],
-                        "Latitude": biz_lat,
-                        "Longitude": biz_lon,
-                        "FTTH_lat": float(ft_lat),
-                        "FTTH_lon": float(ft_lon),
-                        "Distance(m)": round(d, 2),
-                    }
-                )
+                matches.append({
+                    "name": row.get("name", ""),
+                    "Address": row["Address"],
+                    "Latitude": biz_lat,
+                    "Longitude": biz_lon,
+                    "FTTH_lat": float(ft_lat),
+                    "FTTH_lon": float(ft_lon),
+                    "Distance(m)": round(d, 2),
+                })
                 break
 
     result_df = pd.DataFrame(matches)
     if not result_df.empty and "Distance(m)" in result_df.columns:
         result_df = result_df.sort_values("Distance(m)").reset_index(drop=True)
 
-    # ----- UI -----
     if result_df.empty:
         st.warning(f"⚠️ Δεν βρέθηκαν αντιστοιχίσεις εντός {distance_limit} m.")
     else:
         st.success(f"✅ Βρέθηκαν {len(result_df)} επιχειρήσεις εντός {distance_limit} m από FTTH.")
         st.dataframe(result_df, use_container_width=True)
 
-    # ----- Robust Excel export -----
     def to_excel_bytes(df: pd.DataFrame):
         safe = df.copy()
         if safe is None or safe.empty:
@@ -926,16 +893,11 @@ if start and biz_df is not None and ftth_df is not None:
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             safe.to_excel(writer, index=False, sheet_name="Sheet1")
-        output.seek(0)
-        return output
+        output.seek(0); return output
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.download_button(
-            "⬇️ Geocoded διευθύνσεις (γραμμή-γραμμή)",
-            to_excel_bytes(merged[["Address", "Latitude", "Longitude"]]),
-            file_name="geocoded_addresses.xlsx",
-        )
+        st.download_button("⬇️ Geocoded διευθύνσεις (γραμμή-γραμμή)", to_excel_bytes(merged[["Address","Latitude","Longitude"]]), file_name="geocoded_addresses.xlsx")
     with c2:
         st.download_button("⬇️ Αποτελέσματα Matching", to_excel_bytes(result_df), file_name="ftth_matching_results.xlsx")
     with c3:
