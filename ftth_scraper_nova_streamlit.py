@@ -17,6 +17,17 @@ except Exception:
 
 st.set_page_config(page_title="FTTH Geocoding & Matching (v5)", layout="wide")
 st.title("📡 FTTH Geocoding & Matching – v5")
+# --- safe defaults for GEMI config ---
+DEFAULT_GEMI_BASE = "https://publicity.businessportal.gr"
+DEFAULT_HEADER_NAME = "api_key"
+
+# seed session with defaults so code doesn't crash before opening the sidebar
+if "GEMI_BASE_URL" not in st.session_state:
+    st.session_state["GEMI_BASE_URL"] = DEFAULT_GEMI_BASE
+if "GEMI_HEADER_NAME" not in st.session_state:
+    st.session_state["GEMI_HEADER_NAME"] = DEFAULT_HEADER_NAME
+if "GEMI_API_KEY" not in st.session_state:
+    st.session_state["GEMI_API_KEY"] = ""
 
 # ========== Sidebar ==========
 with st.sidebar:
@@ -238,14 +249,13 @@ def _to_excel_bytes(df: pd.DataFrame):
 # ---------- GEMI client ----------
 def _gemi_headers():
     """
-    Επιστρέφει headers για opendata ή publicity.
-    - Αν υπάρχει header_name + api_key, τα στέλνει (opendata).
-    - Αν μιλάμε στο publicity, προσθέτει X-Requested-With/Origin/Referer και ΔΕΝ
-      απαιτεί api_key.
+    Headers for opendata/publicity.
+    - If header name & key exist → add them (for opendata).
+    - If we talk to publicity → act like a browser, no api_key required.
     """
-    base = st.session_state.get("GEMI_BASE_URL", "").strip().lower()
-    name = st.session_state.get("GEMI_HEADER_NAME", "").strip()
-    key  = st.session_state.get("GEMI_API_KEY", "").strip()
+    base = (st.session_state.get("GEMI_BASE_URL") or "").lower()
+    name = (st.session_state.get("GEMI_HEADER_NAME") or "").strip()
+    key  = (st.session_state.get("GEMI_API_KEY") or "").strip()
 
     h = {"Accept": "application/json", "Content-Type": "application/json"}
     if name and key:
@@ -256,6 +266,7 @@ def _gemi_headers():
         h["Origin"] = "https://publicity.businessportal.gr"
         h["Referer"] = "https://publicity.businessportal.gr/"
     return h
+
 
 def _gemi_candidates(kind: str, *, parent_id=None):
     """kind ∈ {'regions','regional_units','dimoi','statuses','kad'}. parent_id: region_id για regional_units, regunit_id για dimoi."""
@@ -389,9 +400,12 @@ def gemi_search(
     tried = []
     last_err = None
 
-    for base in _gemi_bases():
-        for path in paths:
-            url = f"{base}{path}"
+  def _gemi_bases():
+    """Return a list of base URLs to try, always with sane defaults."""
+    base = (st.session_state.get("GEMI_BASE_URL") or DEFAULT_GEMI_BASE).strip().rstrip("/")
+    if base.endswith("/opendata"):
+        return [base, base.rsplit("/opendata", 1)[0]]
+    return [base, base + "/opendata"]
 
             # 1) POST tries
             for payload in payload_variants_post:
