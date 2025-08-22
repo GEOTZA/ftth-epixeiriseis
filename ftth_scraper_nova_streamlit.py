@@ -8,6 +8,7 @@ import pandas as pd
 import requests
 import streamlit as st
 from geopy.distance import geodesic
+from urllib.parse import urlsplit
 
 # ---------- Optional cache ----------
 try:
@@ -139,6 +140,24 @@ ftth_file = st.file_uploader("FTTH σημεία Nova (Excel/CSV) – υποστ�
 prev_geo_file = st.file_uploader("🧠 Προηγούμενα geocoded (προαιρετικά) – Excel/CSV με στήλες: Address, Latitude, Longitude", type=["xlsx", "csv"])
 
 # ---------- Helpers ----------
+def _normalize_paths(raw: str):
+    seen, out = set(), []
+    for p in (raw or "").split(","):
+        p = (p or "").strip()
+        if not p:
+            continue
+        if p.lower().startswith("http"):
+            p = urlsplit(p).path
+        p = p.replace("ο", "o")  # ελληνικό ο -> latin o
+        p = "/" + p.lstrip("/")
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+    
+def _clean_payload(d: dict) -> dict:
+    return {k: v for k, v in (d or {}).items() if v not in (None, "", [], {})}
+
 def load_table(uploaded):
     if uploaded is None:
         return None
@@ -216,24 +235,26 @@ def _gemi_bases():
     return [base, base + "/opendata"]
 
 def _gemi_headers():
-    """
-    Headers for opendata/publicity.
-    - If header name & key exist → add them (for opendata).
-    - If we talk to publicity → act like a browser, no api_key required.
-    """
     base = (st.session_state.get("GEMI_BASE_URL") or "").lower()
     name = (st.session_state.get("GEMI_HEADER_NAME") or "").strip()
     key  = (st.session_state.get("GEMI_API_KEY") or "").strip()
 
     h = {"Accept": "application/json", "Content-Type": "application/json"}
+    # κύριο header από UI
     if name and key:
         h[name] = key
+    # επιπλέον συμβατότητες
+    if key:
+        h.setdefault("api_key", key)
+        h.setdefault("X-API-Key", key)
+        h.setdefault("Authorization", f"Bearer {key}")
 
     if "publicity.businessportal.gr" in base:
         h["X-Requested-With"] = "XMLHttpRequest"
         h["Origin"] = "https://publicity.businessportal.gr"
         h["Referer"] = "https://publicity.businessportal.gr/"
     return h
+
 
 def _slugs_to_list(s: str):
     return [x.strip() for x in (s or "").split(",") if x.strip()]
@@ -289,66 +310,105 @@ def gemi_params(kind, *, parent_id=None, timeout=20):
 
 def gemi_search(
     *,
-    region_id=None,
-    regunit_id=None,
-    nomos_id=None,
-    dimos_id=None,
-    status_id=None,
-    name_part=None,
-    kad_list=None,
-    date_from=None,
-    date_to=None,
-    page=1,
-    page_size=200,
-    timeout=60,
-    soft_fail=False,
+    region_id=None, regunit_id=None, nomos_id=None, dimos_id=None,
+    status_id=None, name_part=None, kad_list=None,
+    date_from=None, date_to=None,
+    page=1, page_size=200, timeout=60, soft_fail=False,
 ):
-    """
-    Αναζήτηση εταιρειών: δοκιμάζει πολλαπλά paths + payload variants.
-    Αν soft_fail=True και όλα αποτύχουν, επιστρέφει {"items": []}.
-    """
     headers = _gemi_headers()
+    api_key = (st.session_state.get("GEMI_API_KEY") or "").strip()
+    tried = []; last_err = None
 
-    payload_variants_post = [
+    # paths από UI (διορθώνει τυχόν full URLs/ελληνικά ο)
+    raw_paths = st.session_state.get("GEMI_SEARCH_PATHS", "companies/search")
+    if "http" in raw_paths.lower():
+        raw_paths = "companies/search"
+    paths = _normalize_paths(raw_paths)
+
+    # payload variants (θα καθαριστούν από κενές τιμές πριν σταλούν)
+    post_vars = [
         {
-            "page": page,
-            "page_size": page_size,
-            "region_id": region_id,
-            "perifereia_id": region_id,
+            "page": page, "page_size": page_size,
+            "region_id": region_id, "perifereia_id": region_id,
             "regional_unit_id": regunit_id or nomos_id,
             "perifereiaki_enotita_id": regunit_id or nomos_id,
             "prefecture_id": regunit_id or nomos_id,
-            "nomos_id": nomos_id,
-            "dimos_id": dimos_id,
-            "status_id": status_id,
-            "name_part": name_part,
+            "nomos_id": nomos_id, "dimos_id": dimos_id,
+            "status_id": status_id, "name_part": name_part,
             "kad": kad_list or [],
-            "incorporation_date_from": date_from,
-            "incorporation_date_to": date_to,
-            "foundation_date_from": date_from,
-            "foundation_date_to": date_to,
-            "registration_date_from": date_from,
-            "registration_date_to": date_to,
+            "incorporation_date_from": date_from, "incorporation_date_to": date_to,
+            "foundation_date_from": date_from, "foundation_date_to": date_to,
+            "registration_date_from": date_from, "registration_date_to": date_to,
         },
         {
-            "page": page,
-            "per_page": page_size,
+            "page": page, "per_page": page_size,
             "regionId": region_id,
             "regionalUnitId": regunit_id or nomos_id,
             "prefectureId": regunit_id or nomos_id,
-            "nomosId": nomos_id,
-            "dimosId": dimos_id,
-            "statusId": status_id,
-            "name": name_part,
+            "nomosId": nomos_id, "dimosId": dimos_id,
+            "statusId": status_id, "name": name_part,
             "kad": kad_list or [],
-            "incorporationDateFrom": date_from,
-            "incorporationDateTo": date_to,
-            "foundationDateFrom": date_from,
-            "foundationDateTo": date_to,
-            "registrationDateFrom": date_from,
-            "registrationDateTo": date_to,
+            "incorporationDateFrom": date_from, "incorporationDateTo": date_to,
+            "foundationDateFrom": date_from, "foundationDateTo": date_to,
+            "registrationDateFrom": date_from, "registrationDateTo": date_to,
+        },
+        {  # ultra-minimal (μερικές εκδόσεις θέλουν μόνο pagination)
+            "page": page, "per_page": page_size
         },
     ]
+    get_vars = [
+        {"page": page, "page_size": page_size},
+        {"page": page, "per_page": page_size},
+    ]
+
+    logs = []  # θα εμφανιστούν στο Διαγνωστικά
+
+    for base in _gemi_bases():
+        for path in paths:
+            url = f"{base}{path}"
+
+            # POST
+            for payload in post_vars:
+                payload = _clean_payload(payload)
+                tried.append(f"POST {url} keys={list(payload.keys())}")
+                try:
+                    r = requests.post(url, json=payload, headers=headers, timeout=timeout)
+                    if not r.ok:
+                        logs.append(f"POST {r.status_code} {url} :: {r.text[:400]}")
+                        last_err = f"{r.status_code} on {url}"
+                        continue
+                    js = r.json()
+                    st.session_state["GEMI_SEARCH_TRIED"] = tried + logs + [f"OK POST {url}"]
+                    return js
+                except requests.RequestException as e:
+                    last_err = f"POST EXC {type(e).__name__}: {e}"
+                    logs.append(last_err)
+
+            # GET
+            for params in get_vars:
+                params = _clean_payload(params)
+                # μερικοί servers δέχονται api_key ως query
+                if api_key and "api_key" not in headers:
+                    params["api_key"] = api_key
+                tried.append(f"GET  {url} keys={list(params.keys())}")
+                try:
+                    r = requests.get(url, params=params, headers=headers, timeout=timeout)
+                    if not r.ok:
+                        logs.append(f"GET {r.status_code} {url} :: {r.text[:400]}")
+                        last_err = f"{r.status_code} on {url}"
+                        continue
+                    js = r.json()
+                    st.session_state["GEMI_SEARCH_TRIED"] = tried + logs + [f"OK GET {url}"]
+                    return js
+                except requests.RequestException as e:
+                    last_err = f"GET EXC {type(e).__name__}: {e}"
+                    logs.append(last_err)
+
+    st.session_state["GEMI_SEARCH_TRIED"] = tried + logs
+    if soft_fail:
+        return {"items": []}
+    raise RuntimeError(f"ΓΕΜΗ: αναζήτηση απέτυχε. Τελευταίο σφάλμα: {last_err}")
+
 
     payload_variants_get = [
         {"page": page, "per_page": page_size},
