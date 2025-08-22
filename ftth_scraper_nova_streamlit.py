@@ -237,13 +237,25 @@ def _to_excel_bytes(df: pd.DataFrame):
 
 # ---------- GEMI client ----------
 def _gemi_headers():
-    return {st.session_state["GEMI_HEADER_NAME"]: st.session_state.get("GEMI_API_KEY", ""), "Accept": "application/json"}
+    """
+    Επιστρέφει headers για opendata ή publicity.
+    - Αν υπάρχει header_name + api_key, τα στέλνει (opendata).
+    - Αν μιλάμε στο publicity, προσθέτει X-Requested-With/Origin/Referer και ΔΕΝ
+      απαιτεί api_key.
+    """
+    base = st.session_state.get("GEMI_BASE_URL", "").strip().lower()
+    name = st.session_state.get("GEMI_HEADER_NAME", "").strip()
+    key  = st.session_state.get("GEMI_API_KEY", "").strip()
 
-def _gemi_bases():
-    b = st.session_state["GEMI_BASE_URL"].rstrip("/")
-    if b.endswith("/opendata"):
-        return [b, b.rsplit("/opendata", 1)[0]]
-    return [b, b + "/opendata"]
+    h = {"Accept": "application/json", "Content-Type": "application/json"}
+    if name and key:
+        h[name] = key
+
+    if "publicity.businessportal.gr" in base:
+        h["X-Requested-With"] = "XMLHttpRequest"
+        h["Origin"] = "https://publicity.businessportal.gr"
+        h["Referer"] = "https://publicity.businessportal.gr/"
+    return h
 
 def _gemi_candidates(kind: str, *, parent_id=None):
     """kind ∈ {'regions','regional_units','dimoi','statuses','kad'}. parent_id: region_id για regional_units, regunit_id για dimoi."""
