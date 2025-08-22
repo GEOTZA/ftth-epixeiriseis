@@ -15,8 +15,8 @@ try:
 except Exception:
     CACHE_OK = False
 
-st.set_page_config(page_title="FTTH Geocoding & ΓΕΜΗ (v8)", layout="wide")
-st.title("📡 FTTH Geocoding & Matching – v8")
+st.set_page_config(page_title="FTTH Geocoding & ΓΕΜΗ (v9)", layout="wide")
+st.title("📡 FTTH Geocoding & Matching – v9")
 
 # =========================
 # Sidebar – Ρυθμίσεις
@@ -40,11 +40,11 @@ with st.sidebar:
     # Αποθήκευση για χρήση παντού
     st.session_state.update(gemi_base=gemi_base, gemi_header=gemi_header, gemi_key=gemi_key)
 
-    st.caption("Limit: 8 req/min → κάνουμε caching & backoff (429).")
-    if st.button("🧪 Test /params/regions"):
+    st.caption("Limit: 8 req/min → γίνεται caching & backoff (429).")
+    if st.button("🧪 Test /companies (χωρίς φίλτρα)"):
         try:
-            test_url = urljoin(gemi_base.replace("οpendata","opendata").rstrip("/") + "/", "params/regions")
-            r = requests.get(test_url, headers={gemi_header: gemi_key} if gemi_key else {}, timeout=20)
+            test_url = urljoin(gemi_base.replace("οpendata","opendata").rstrip("/") + "/", "companies")
+            r = requests.get(test_url, params={"page":1,"per_page":1}, headers={gemi_header:gemi_key} if gemi_key else {}, timeout=20)
             r.raise_for_status()
             st.success("OK: Το endpoint απάντησε.")
         except Exception as e:
@@ -117,6 +117,9 @@ def normalize_ftth(df: pd.DataFrame) -> pd.DataFrame:
     out = out.dropna(subset=["latitude","longitude"])
     return out
 
+# =========================
+# Geocode helpers
+# =========================
 def geocode_nominatim(session, address, cc="gr", lang="el"):
     params = {"q": address, "format": "json", "limit": 1, "countrycodes": cc, "accept-language": lang}
     r = session.get("https://nominatim.openstreetmap.org/search", params=params, timeout=15)
@@ -144,7 +147,7 @@ def geocode_address(session, address, provider, api_key=None, cc="gr", lang="el"
         if not getattr(session, "cache_disabled", True):
             time.sleep(throttle_sec)
     if (lat is None) and ("greece" not in address.lower()) and ("ελλάδα" not in address.lower()):
-        fallback = f"{address}, Greece"
+        fallback = f"{address}, Greece}"
         if provider.startswith("Google") and api_key:
             lat, lon = geocode_google(session, fallback, api_key, lang=lang)
         else:
@@ -154,7 +157,7 @@ def geocode_address(session, address, provider, api_key=None, cc="gr", lang="el"
     return lat, lon
 
 # =========================
-# ΓΕΜΗ – client (auto-load dropdowns)
+# ΓΕΜΗ – client (χωρίς /params υποχρεωτικά)
 # =========================
 def _fix_base(base: str) -> str:
     return (base or "").replace("οpendata", "opendata").rstrip("/")
@@ -172,7 +175,7 @@ def _safe_get(url, headers, params=None, timeout=TIMEOUT, retries=3, base_delay=
             r = requests.get(url, headers=headers, params=params, timeout=timeout)
             if r.status_code == 429:
                 ra = r.headers.get("Retry-After")
-                wait = max(0.5, float(ra)) if ra and ra.isdigit() else base_delay * (2 ** i)
+                wait = max(0.5, float(ra)) if (ra and str(ra).isdigit()) else base_delay * (2 ** i)
                 time.sleep(wait)
                 if i < retries:
                     continue
@@ -184,51 +187,6 @@ def _safe_get(url, headers, params=None, timeout=TIMEOUT, retries=3, base_delay=
                 time.sleep(base_delay * (2 ** i))
             else:
                 raise last
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def _params_cached(api_key, base, header, what, region_id=None):
-    return _params_live(api_key, base, header, what, region_id=region_id)
-
-def _params_live(api_key: str, base: str, header: str, what: str, *, region_id=None):
-    base = _fix_base(base)
-    headers = _headers(api_key, header)
-    def E(ep): return urljoin(base + "/", ep.lstrip("/"))
-
-    if what == "regions":
-        endpoints = ["params/regions", "params/perifereies", "params/peripheries", "params/nomoi"]
-    elif what in ("regional_units","perifereiakes_enotites"):
-        if region_id:
-            endpoints = [f"params/regional_units/{region_id}",
-                         f"params/perifereiakes_enotites/{region_id}",
-                         f"params/periferiakes_enotites/{region_id}",
-                         f"params/prefectures/{region_id}"]
-        else:
-            endpoints = ["params/regional_units", "params/perifereiakes_enotites",
-                         "params/periferiakes_enotites", "params/prefectures"]
-    elif what in ("dimoi","municipalities"):
-        if region_id:
-            endpoints = [f"params/dimoi/{region_id}", f"params/municipalities/{region_id}"]
-        else:
-            endpoints = ["params/dimoi", "params/municipalities"]
-    elif what in ("statuses",):
-        endpoints = ["params/statuses", "params/status", "params/company_statuses"]
-    elif what in ("kad","kads"):
-        endpoints = ["params/kad","params/kads","params/activity_codes","params/kad_codes","params/nace"]
-    else:
-        endpoints = [f"params/{what}"]
-
-    last_err = ""
-    for ep in endpoints:
-        u = E(ep)
-        try:
-            r = _safe_get(u, headers=headers)
-            js = r.json()
-            if isinstance(js, (list, dict)):
-                return js
-        except Exception as e:
-            last_err = str(e)
-            continue
-    raise RuntimeError(f"ΓΕΜΗ: δεν βρέθηκε endpoint για '{what}'. Τελ. σφάλμα: {last_err}")
 
 def _variants_query(page, per_page, name_part,
                     region_id, regional_unit_id, municipality_id,
@@ -271,7 +229,6 @@ def gemi_companies_search(api_key: str, base: str, header: str, *,
                             region_id, regional_unit_id, municipality_id,
                             status_id, kad_list, date_from, date_to)
 
-    # 1) GET /companies
     url_get = urljoin(base + "/", "companies")
     last_err, last_keys = "", []
     for q in vlist:
@@ -280,9 +237,10 @@ def gemi_companies_search(api_key: str, base: str, header: str, *,
             r = _safe_get(url_get, headers=headers, params=q)
             return r.json()
         except Exception as e:
-            last_err = str(e); last_keys = list(q.keys())
+            last_err = f"{e} (url={url_get}, keys={list(q.keys())})"
+            last_keys = list(q.keys())
 
-    # 2) POST /companies/search (fallback)
+    # Fallback: POST /companies/search (αν υπάρχει)
     url_post = urljoin(base + "/", "companies/search")
     for q in vlist:
         q = {k: v for k, v in q.items() if v not in (None, "", [])}
@@ -290,14 +248,15 @@ def gemi_companies_search(api_key: str, base: str, header: str, *,
             r = requests.post(url_post, json=q, headers=headers, timeout=TIMEOUT)
             if r.status_code == 429:
                 ra = r.headers.get("Retry-After")
-                time.sleep(float(ra) if ra and ra.isdigit() else 1.5)
+                time.sleep(float(ra) if (ra and str(ra).isdigit()) else 1.5)
                 r = requests.post(url_post, json=q, headers=headers, timeout=TIMEOUT)
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            last_err = str(e); last_keys = list(q.keys())
+            last_err = f"{e} (url={url_post}, keys={list(q.keys())})"
+            last_keys = list(q.keys())
 
-    raise RuntimeError(f"ΓΕΜΗ: αναζήτηση απέτυχε. Τελευταίο σφάλμα: {last_err} (url={url_get} → {url_post}, keys={last_keys})")
+    raise RuntimeError(f"ΓΕΜΗ: αναζήτηση απέτυχε. Τελευταίο σφάλμα: {last_err}")
 
 def gemi_companies_all(api_key: str, base: str, header: str, *,
                        name_part=None,
@@ -375,119 +334,23 @@ def companies_items_to_df(items: list[dict]) -> pd.DataFrame:
 tab1, tab2 = st.tabs(["🏷️ ΓΕΜΗ – Εξαγωγή Excel", "🏁 FTTH Geocoding & Matching"])
 
 # --------------------------------------------------------------------
-# Tab 1: ΓΕΜΗ – Εξαγωγή (AUTO-LOAD DROPDOWNS)
+# Tab 1: ΓΕΜΗ – Εξαγωγή (Fallback φίλτρα χωρίς /params)
 # --------------------------------------------------------------------
 with tab1:
-    st.subheader("ΓΕΜΗ – Φίλτρα & Εξαγωγή (auto-load)")
+    st.subheader("ΓΕΜΗ – Φίλτρα & Εξαγωγή (χωρίς /params)")
 
-    # Ανανέωση λιστών (καθαρίζει cache)
-    if st.button("↻ Ανανέωση λιστών (clear cache)"):
-        _params_cached.clear()
-        st.success("Έγινε καθαρισμός cache. Δοκίμασε ξανά.")
+    # Fallback text filters (client-side)
+    st.caption("Αν οι λίστες /params δεν λειτουργούν, χρησιμοποίησε τα παρακάτω φίλτρα με κείμενο (client-side).")
+    region_name_like = st.text_input("Φίλτρο Περιφέρειας (όνομα περιέχει)", "")
+    runit_name_like  = st.text_input("Φίλτρο Περιφερειακής Ενότητας (όνομα περιέχει)", "")
+    muni_name_like   = st.text_input("Φίλτρο Δήμου (όνομα περιέχει)", "")
 
-    # Περιφέρειες (auto)
-    try:
-        with st.spinner("Φόρτωση Περιφερειών…"):
-            regions = _params_cached(st.session_state["gemi_key"], st.session_state["gemi_base"], st.session_state["gemi_header"], "regions")
-        region_map = {}
-        if isinstance(regions, list):
-            for r in regions:
-                rid = r.get("id") or r.get("code") or r.get("region_id") or r.get("nomos_id")
-                rname = r.get("name") or r.get("title") or r.get("label")
-                if rid and rname:
-                    region_map[rname] = rid
-    except Exception as e:
-        st.error(f"Σφάλμα φόρτωσης Περιφερειών: {e}")
-        region_map = {}
+    # Ελεύθερα φίλτρα server-side
+    name_part = st.text_input("Επωνυμία περιέχει (server-side)", "")
+    load_kad = st.checkbox("Φίλτρο ΚΑΔ (server-side): δώσε κωδικούς χωρισμένους με κόμμα", value=False)
+    kad_csv = st.text_input("ΚΑΔ (π.χ. 47.11,56.10)", "") if load_kad else ""
+    sel_kads = [k.strip() for k in kad_csv.split(",")] if load_kad and kad_csv.strip() else None
 
-    sel_region_name = st.selectbox("Περιφέρεια", ["— Όλες —"] + sorted(region_map.keys()))
-    sel_region_id = region_map.get(sel_region_name)
-
-    # Περιφερειακές Ενότητες (με βάση Περιφέρεια)
-    runit_map = {}
-    if sel_region_id:
-        try:
-            with st.spinner("Φόρτωση Περιφερειακών Ενοτήτων…"):
-                runits = _params_cached(st.session_state["gemi_key"], st.session_state["gemi_base"], st.session_state["gemi_header"], "regional_units", region_id=sel_region_id)
-            if isinstance(runits, list):
-                for u in runits:
-                    uid = u.get("id") or u.get("code") or u.get("regional_unit_id") or u.get("prefecture_id")
-                    uname = u.get("name") or u.get("title") or u.get("label")
-                    if uid and uname:
-                        runit_map[uname] = uid
-        except Exception as e:
-            st.error(f"Σφάλμα φόρτωσης Περιφερειακών Ενοτήτων: {e}")
-
-    sel_runit_name = st.selectbox("Περιφερειακή Ενότητα", ["— Όλες —"] + sorted(runit_map.keys()))
-    sel_runit_id = runit_map.get(sel_runit_name)
-
-    # Δήμοι (με βάση Περιφερειακή Ενότητα)
-    muni_map = {}
-    if sel_runit_id:
-        try:
-            with st.spinner("Φόρτωση Δήμων…"):
-                munis = _params_cached(st.session_state["gemi_key"], st.session_state["gemi_base"], st.session_state["gemi_header"], "dimoi", region_id=sel_runit_id)
-            if isinstance(munis, list):
-                for m in munis:
-                    mid = m.get("id") or m.get("code") or m.get("municipality_id") or m.get("dimos_id")
-                    mname = m.get("name") or m.get("title") or m.get("label")
-                    if mid and mname:
-                        muni_map[mname] = mid
-        except Exception as e:
-            st.error(f"Σφάλμα φόρτωσης Δήμων: {e}")
-
-    sel_muni_name = st.selectbox("Δήμος", ["— Όλοι —"] + sorted(muni_map.keys()))
-    sel_muni_id = muni_map.get(sel_muni_name)
-
-    # Καταστάσεις (μικρή λίστα → auto)
-    status_map = {}
-    try:
-        statuses = _params_cached(st.session_state["gemi_key"], st.session_state["gemi_base"], st.session_state["gemi_header"], "statuses")
-        if isinstance(statuses, list):
-            for s in statuses:
-                sid = s.get("id") or s.get("code")
-                sname = s.get("name") or s.get("title")
-                if sid and sname:
-                    status_map[sname] = sid
-    except Exception as e:
-        st.warning(f"Αδυναμία φόρτωσης καταστάσεων: {e}")
-
-    status_names = ["— Όλες —"] + sorted(status_map.keys())
-    default_idx = 0
-    for i, nm in enumerate(status_names):
-        if "ενεργ" in nm.lower():
-            default_idx = i; break
-    sel_status_name = st.selectbox("Κατάσταση", status_names, index=default_idx)
-    sel_status_id = status_map.get(sel_status_name)
-
-    # ΚΑΔ (βαριά λίστα: φόρτωση μόνο όταν ζητηθεί)
-    load_kad = st.checkbox("Φόρτωσε λίστα ΚΑΔ", value=False)
-    sel_kads = []
-    if load_kad:
-        try:
-            with st.spinner("Φόρτωση ΚΑΔ…"):
-                kads = _params_cached(st.session_state["gemi_key"], st.session_state["gemi_base"], st.session_state["gemi_header"], "kad")
-            lbl_to_code = {}
-            if isinstance(kads, list):
-                def _lbl(x):
-                    if isinstance(x, dict):
-                        code = x.get("code") or x.get("kad") or x.get("id") or x.get("nace") or ""
-                        desc = x.get("name") or x.get("title") or x.get("description") or ""
-                        return f"{code} — {desc}".strip(" —")
-                    return str(x)
-                for x in kads:
-                    if not isinstance(x, dict): 
-                        continue
-                    code = (x.get("code") or x.get("kad") or x.get("id") or x.get("nace") or "").strip()
-                    if code:
-                        lbl_to_code[_lbl(x)] = code
-            sel_kad_labels = st.multiselect("ΚΑΔ (προαιρετικό)", sorted(lbl_to_code.keys()))
-            sel_kads = [lbl_to_code[l] for l in sel_kad_labels]
-        except Exception as e:
-            st.warning(f"Αδυναμία φόρτωσης ΚΑΔ: {e}")
-
-    # Ελεύθερα φίλτρα
-    name_part = st.text_input("Επωνυμία περιέχει (προαιρετικό)", "")
     c1, c2 = st.columns(2)
     with c1:
         date_from = st.text_input("Σύσταση από (YYYY-MM-DD)", "")
@@ -496,13 +359,20 @@ with tab1:
 
     cA, cB = st.columns(2)
     with cA:
-        do_preview = st.button("🔎 Προεπισκόπηση (μέχρι 200 εγγραφές)")
+        do_preview = st.button("🔎 Προεπισκόπηση (<=200 εγγραφές)")
     with cB:
         do_export = st.button("⬇️ Εξαγωγή Excel (όλες οι σελίδες)")
 
-    def _apply_safety_filters(df: pd.DataFrame):
+    def _apply_text_filters(df: pd.DataFrame):
         out = df.copy()
-        if not out.empty and (date_from or date_to):
+        if region_name_like:
+            out = out[out["region"].astype(str).str.contains(region_name_like, case=False, na=False)]
+        if runit_name_like:
+            out = out[out["regional_unit"].astype(str).str.contains(runit_name_like, case=False, na=False)]
+        if muni_name_like:
+            out = out[out["municipality"].astype(str).str.contains(muni_name_like, case=False, na=False)]
+        # Ημερομηνίες
+        if date_from or date_to:
             dser = pd.to_datetime(out["incorporation_date"], errors="coerce").dt.date
             if date_from:
                 try:
@@ -516,8 +386,9 @@ with tab1:
                     out = out[dser <= dmax]
                 except Exception:
                     pass
-        if not out.empty and sel_kads:
-            patt = "|".join([re.escape(k) for k in sel_kads])
+        # ΚΑΔ client-side (αν δεν περάσαμε server-side)
+        if (not load_kad) and ("kad_codes" in out.columns) and kad_csv.strip():
+            patt = "|".join([re.escape(k.strip()) for k in kad_csv.split(",") if k.strip()])
             out = out[out["kad_codes"].astype(str).str.contains(patt, na=False, regex=True)]
         return out
 
@@ -527,13 +398,13 @@ with tab1:
                 st.session_state["gemi_key"], st.session_state["gemi_base"], st.session_state["gemi_header"],
                 page=1, per_page=200,
                 name_part=(name_part or None),
-                region_id=sel_region_id, regional_unit_id=sel_runit_id, municipality_id=sel_muni_id,
-                status_id=sel_status_id, kad_list=sel_kads or None,
+                region_id=None, regional_unit_id=None, municipality_id=None,  # ΔΕΝ ζητάμε IDs
+                status_id=None, kad_list=(sel_kads or None),
                 date_from=(date_from or None), date_to=(date_to or None),
             )
             items = js.get("items") or js.get("data") or js.get("results") or []
             df = companies_items_to_df(items)
-            df = _apply_safety_filters(df)
+            df = _apply_text_filters(df)
             if df.empty:
                 st.warning("Δεν βρέθηκαν εγγραφές.")
             else:
@@ -546,17 +417,17 @@ with tab1:
 
     if do_export:
         try:
-            with st.spinner("Γίνεται εξαγωγή…"):
+            with st.spinner("Γίνεται εξαγωγή… (τηρείται 8 req/min)"):
                 all_items = gemi_companies_all(
                     st.session_state["gemi_key"], st.session_state["gemi_base"], st.session_state["gemi_header"],
                     name_part=(name_part or None),
-                    region_id=sel_region_id, regional_unit_id=sel_runit_id, municipality_id=sel_muni_id,
-                    status_id=sel_status_id, kad_list=sel_kads or None,
+                    region_id=None, regional_unit_id=None, municipality_id=None,
+                    status_id=None, kad_list=(sel_kads or None),
                     date_from=(date_from or None), date_to=(date_to or None),
                     per_page=200, max_pages=200
                 )
                 df = companies_items_to_df(all_items)
-                df = _apply_safety_filters(df)
+                df = _apply_text_filters(df)
                 if df.empty:
                     st.warning("Δεν βρέθηκαν εγγραφές για εξαγωγή.")
                 else:
