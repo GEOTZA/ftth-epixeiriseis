@@ -144,6 +144,42 @@ def gemi_companies_search(*, name=None, prefectures=None, municipalities=None,
     """
     if size < 1: size = 1
     if size > 200: size = 200
+        def _join_vals(vals):
+    if not vals:
+        return None
+    return ",".join(str(v) for v in vals if str(v).strip() != "")
+
+def gemi_companies_search(*, name=None, prefectures=None, municipalities=None,
+                          statuses=None, is_active=None, activities=None,
+                          offset=0, size=200, sort="+arGemi"):
+    if size < 1: size = 1
+    if size > 200: size = 200
+    if not any([name, prefectures, municipalities, statuses, is_active, activities]):
+        raise ValueError("Το API απαιτεί τουλάχιστον 1 κριτήριο.")
+
+    params = {
+        "resultsOffset": int(offset),
+        "resultsSize": int(size),
+        "resultsSortBy": sort,
+    }
+    if name and len(str(name)) >= 3:
+        params["name"] = name
+    if prefectures:
+        params["prefectures"] = _join_vals(prefectures)
+    if municipalities:
+        params["municipalities"] = _join_vals(municipalities)
+    if statuses:
+        params["statuses"] = _join_vals(statuses)
+    if activities:
+        params["activities"] = _join_vals(activities)
+    if is_active is not None:
+        # ✅ το API θέλει lowercase strings
+        params["isActive"] = "true" if bool(is_active) else "false"
+
+    url = f"{_base()}/companies"
+    r = _http_get(url, params=params, headers=_hdr(), timeout=TIMEOUT)
+    return r.json()
+
 
     # API: απαιτείται τουλάχιστον ένα κριτήριο
     if not any([name, prefectures, municipalities, statuses, is_active, activities]):
