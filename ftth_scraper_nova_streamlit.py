@@ -104,26 +104,37 @@ def _to_excel_bytes(df: pd.DataFrame):
     return output
 
 # ============= GEMI OpenData (σύμφωνα με Swagger) =============
+# --- GEMI base & header (Swagger) ---
 GEMI_BASE = "https://opendata-api.businessportal.gr/api/opendata/v1"
-GEMI_HEADER = "api_key"
+GEMI_HEADER_NAME = "api_key"
 TIMEOUT = 40
 
 def _hdr(api_key: str):
-    return {GEMI_HEADER: api_key, "Accept": "application/json"}
+    return {GEMI_HEADER_NAME: api_key, "Accept": "application/json"}
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def gemi_metadata(api_key: str):
-    """
-    Φέρνει λίστες: prefectures, municipalities, companyStatuses, activities.
-    Επιστρέφει dict με keys: 'prefectures','municipalities','statuses','activities'
-    """
-    s = requests.Session()
-    s.headers.update(_hdr(api_key))
-    def _get(ep):
-        url = f"{GEMI_BASE}/{ep.lstrip('/')}"
-        r = s.get(url, timeout=TIMEOUT)
-        r.raise_for_status()
-        return r.json()
+def md_get(api_key: str, path: str):
+    r = requests.get(f"{GEMI_BASE}{path}", headers=_hdr(api_key), timeout=TIMEOUT)
+    if r.status_code == 429:
+        raise RuntimeError("429 Too Many Requests (όριο 8 req/min). Δοκίμασε ξανά μετά από λίγο.")
+    r.raise_for_status()
+    return r.json()
+
+def md_prefectures(api_key: str):
+    # /metadata/prefectures  → [{id:"17", descr:"..."}]
+    return md_get(api_key, "/metadata/prefectures")
+
+def md_municipalities(api_key: str):
+    # /metadata/municipalities → [{id:"61324", prefectureId:"17", descr:"..."}]
+    return md_get(api_key, "/metadata/municipalities")
+
+def md_statuses(api_key: str):
+    # /metadata/companyStatuses → [{id:3, descr:"Ενεργή", isActive:true}, ...]
+    return md_get(api_key, "/metadata/companyStatuses")
+
+def md_activities(api_key: str):
+    # /metadata/activities → [{id:"47.91", descr:"..."}]
+    return md_get(api_key, "/metadata/activities")
+
 
     data = {}
     data["prefectures"]   = _get("metadata/prefectures")
