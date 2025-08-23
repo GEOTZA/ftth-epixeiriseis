@@ -4,3 +4,4 @@ requests
 geopy
 openpyxl
 requests-cache
+email-validator   # για τον έλεγχο emails (προαιρετικό, αλλά προτείνεται)
