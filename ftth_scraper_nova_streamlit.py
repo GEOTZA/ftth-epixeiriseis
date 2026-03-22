@@ -176,32 +176,66 @@ def companies_all(*, name=None, prefectures=None, municipalities=None,
 # =========================
 def companies_to_df(items: list[dict]) -> pd.DataFrame:
     rows = []
-    for it in items:
-        # Activities -> join codes
-        raw_acts = it.get("activities") or []
-        act_codes = []
-        for a in raw_acts:
+    for it in items or []:
+        acts = it.get("activities") or []
+
+        kad_codes = []
+        kad_descrs = []
+        kad_full = []
+
+        for a in acts:
             act = a.get("activity") or {}
-            code = act.get("id") or ""
-            if code:
-                act_codes.append(str(code))
+            act_id = str(act.get("id") or "").strip()
+            act_descr = str(act.get("descr") or "").strip()
+
+            if act_id:
+                kad_codes.append(act_id)
+            if act_descr:
+                kad_descrs.append(act_descr)
+            if act_id or act_descr:
+                kad_full.append(f"{act_id} - {act_descr}".strip(" -"))
+
+        pref = it.get("prefecture") or {}
+        muni = it.get("municipality") or {}
+        stat = it.get("status") or {}
+        ltyp = it.get("legalType") or {}
+
+        ar_gemi = it.get("arGemi")
+
         rows.append({
-            "prefecture": (it.get("prefecture") or {}).get("descr", ""),
-            "municipality": (it.get("municipality") or {}).get("descr", ""),
-            "name": it.get("coNameEl") or "",
-            "afm": it.get("afm") or "",
-            "arGemi": it.get("arGemi") or "",
-            "legal_type": (it.get("legalType") or {}).get("descr", ""),
-            "status": (it.get("status") or {}).get("descr", ""),
-            "incorporation_date": it.get("incorporationDate") or "",
-            "city": it.get("city") or "",
-            "street": it.get("street") or "",
-            "street_no": it.get("streetNumber") or "",
-            "zip": it.get("zipCode") or "",
-            "email": it.get("email") or "",
-            "website": it.get("url") or "",
-            "activities": ";".join(act_codes),
+            "arGemi": ar_gemi,
+            "afm": it.get("afm"),
+            "name_el": it.get("coNameEl"),
+            "status": stat.get("descr"),
+            "legal_type": ltyp.get("descr"),
+            "incorporationDate": it.get("incorporationDate"),
+            "prefecture_id": pref.get("id"),
+            "prefecture": pref.get("descr"),
+            "municipality_id": muni.get("id"),
+            "municipality": muni.get("descr"),
+            "city": it.get("city"),
+            "street": it.get("street"),
+            "streetNumber": it.get("streetNumber"),
+            "zipCode": it.get("zipCode"),
+            "email": it.get("email"),
+            "email_valid": _email_valid(it.get("email")),
+            "url": it.get("url"),
+
+            # ΚΑΔ
+            "kad_codes": "; ".join(kad_codes),
+            "kad_descriptions": "; ".join(kad_descrs),
+            "kad_full": " | ".join(kad_full),
+
+            # συγκεντρωτική διεύθυνση για FTTH
+            "name": it.get("coNameEl"),
+            "address": " ".join([str(x) for x in [it.get("street"), it.get("streetNumber")] if x]).strip(),
+            "postal_code": it.get("zipCode"),
+
+            # links
+            "gemi_api_url": f"{GEMI_BASE}/companies/{ar_gemi}" if ar_gemi else "",
+            "gemi_docs_url": f"{GEMI_BASE}/companies/{ar_gemi}/documents" if ar_gemi else "",
         })
+
     df = pd.DataFrame(rows)
     if not df.empty:
         df = df.drop_duplicates().reset_index(drop=True)
