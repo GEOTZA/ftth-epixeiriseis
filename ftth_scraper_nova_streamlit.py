@@ -170,14 +170,7 @@ def companies_all(*, name=None, prefectures=None, municipalities=None,
         if not rows or (total is not None and len(all_rows) >= total):
             break
     return all_rows
-import re
 
-EMAIL_RX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", re.IGNORECASE)
-
-def _email_valid(email):
-    if email is None:
-        return False
-    return bool(EMAIL_RX.match(str(email).strip()))
 # =========================
 # Normalize Company -> DataFrame
 # =========================
